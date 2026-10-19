@@ -1,0 +1,31 @@
+{
+  "units": [
+    {"id": "CAUSTIC_PREWASH", "name": "Caustic prewash", "tags": ["vertical vessel", "caustic wash", "coalescer section"]},
+    {"id": "MEROX_REACTOR", "name": "Merox reactor", "tags": ["fixed bed reactor", "alkaline catalyst bed"]},
+    {"id": "CAUSTIC_SETTLER", "name": "Caustic settler", "tags": ["horizontal vessel", "settler", "separator"]},
+    {"id": "CAUSTIC_CIRCULATION_PUMP", "name": "Caustic circulation pump", "tags": ["centrifugal pump", "intermittent"]},
+    {"id": "WATER_WASH", "name": "Water wash", "tags": ["vertical vessel", "wash vessel"]},
+    {"id": "SALT_BED", "name": "Salt bed", "tags": ["vertical vessel", "salt drier"]},
+    {"id": "CLAY_BED", "name": "Clay bed", "tags": ["vertical vessel", "clay filter"]}
+  ],
+  "feed_streams": [
+    {"id": "S1", "to_unit": "CAUSTIC_PREWASH", "name": "Jet fuel feed", "connect_point": "side"},
+    {"id": "S2", "to_unit": "CAUSTIC_PREWASH", "name": "Fresh caustic batch", "connect_point": "side"},
+    {"id": "S3", "to_unit": "MEROX_REACTOR", "name": "Compressed air", "connect_point": "side"}
+  ],
+  "intermediate_streams": [
+    {"id": "S4", "from_unit": "CAUSTIC_PREWASH", "to_unit": "MEROX_REACTOR", "name": "Prewashed fuel", "connect_point": "overhead"},
+    {"id": "S5", "from_unit": "MEROX_REACTOR", "to_unit": "CAUSTIC_SETTLER", "name": "Reactor effluent", "connect_point": "bottom"},
+    {"id": "S6", "from_unit": "CAUSTIC_SETTLER", "to_unit": "WATER_WASH", "name": "Fuel phase", "connect_point": "overhead"},
+    {"id": "S7", "from_unit": "CAUSTIC_SETTLER", "to_unit": "CAUSTIC_CIRCULATION_PUMP", "name": "Caustic phase", "connect_point": "bottom"},
+    {"id": "S8", "from_unit": "CAUSTIC_CIRCULATION_PUMP", "to_unit": "MEROX_REACTOR", "name": "Recycled caustic", "connect_point": "side"},
+    {"id": "S9", "from_unit": "WATER_WASH", "to_unit": "SALT_BED", "name": "Washed fuel", "connect_point": "overhead"},
+    {"id": "S10", "from_unit": "SALT_BED", "to_unit": "CLAY_BED", "name": "Dried fuel", "connect_point": "overhead"}
+  ],
+  "product_streams": [
+    {"id": "S11", "from_unit": "CAUSTIC_PREWASH", "name": "Spent caustic drain", "connect_point": "bottom"},
+    {"id": "S12", "from_unit": "WATER_WASH", "name": "Water wash drain", "connect_point": "bottom"},
+    {"id": "S13", "from_unit": "SALT_BED", "name": "Salt bed drain", "connect_point": "bottom"},
+    {"id": "S14", "from_unit": "CLAY_BED", "name": "Sweetened jet fuel", "connect_point": "bottom"}
+  ]
+}

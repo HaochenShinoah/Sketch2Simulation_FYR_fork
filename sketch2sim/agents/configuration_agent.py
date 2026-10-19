@@ -1,13 +1,18 @@
+"""Configuration Agent (B3): connect material streams to unit ports (Step 6)."""
+
+from __future__ import annotations
+
+import json
 import os
 import re
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
-from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph
 from pydantic import BaseModel
+
+from sketch2sim import config, llm
 
 _STEP6_HEADER_RE = re.compile(
     r"(?im)^\s*#\s*===\s*Step\s*6:\s*Connect\s*Streams\s*\(Agent\s*3\)\s*===\s*$"
@@ -90,22 +95,27 @@ def _build_system_prompt() -> str:
         "Your only task is to connect streams exactly as defined in the provided units_unit_view JSON.\n\n"
         "Rules:\n"
         "1. For each unit in units_unit_view:\n"
-        "   - For every item in streams_out, connect this stream from the current unit to to_unit.\n"
-        "   - If to_unit is null, do not connect downstream.\n"
-        "   - For every item in streams_in, connect this stream to to_unit.\n"
-        "   - If from_unit is null, do not connect upstream.\n"
+        "   - For every item in streams_out, connect this stream as an outlet of the current unit "
+        "(to_unit is only informative; null means it is a product leaving the process).\n"
+        "   - For every item in streams_in, connect this stream as an inlet of the current unit "
+        "(from_unit is only informative; null means it is a feed entering the process).\n"
+        "   - A stream that links two units therefore appears twice: once as outlet of its source, once as inlet of its destination.\n"
         "2. Do not create any connection that is not explicitly listed in the JSON.\n"
-        "3. Do not skip any connection that is explicitly listed in the JSON.\n"
+        "3. Do not skip any connection that is explicitly listed in the JSON, except where the "
+        "instruction block tells you to record it with skip(...) because the unit has no free port.\n"
         "4. Do not create new streams or new units.\n\n"
         "Implementation:\n"
         "- Use the existing unit and stream objects already created in the Instantiation script.\n"
         "- Match objects using their IDs.\n"
         "- Only append connection code.\n"
-        "- Use connect_point to decide if stream is liquid (bottom) or gas (overhead) for multiphase flow.\n\n"
+        "- For vessels and reactors use connect_point (and, for side/unknown, the stream name) to "
+        "choose the outlet port as described in the instruction block; single-port units ignore "
+        "connect_point; for columns follow its column section.\n\n"
         "Output:\n"
-        "- Return only the full Python script.\n"
-        "- No explanations. No markdown. No extra text.\n\n"
+        "- Return only the Step 6 block: it starts with the exact line\n"
         "# === Step 6: Connect Streams (Agent 3) ===\n"
+        "  and ends right before the line '# === Step 7: Save Simulation ===' (do not write that line).\n"
+        "- No explanations. No markdown fences. No extra text. Do not repeat Steps 1-5 or 7.\n"
     ).strip()
 
 
@@ -117,8 +127,9 @@ def _build_user_prompt(
         "----------------\n"
         f"{description}\n\n"
         "IMPORTANT:\n"
-        "- Only create connections that are explicitly listed under STRUCTURED_JSON.connections.\n"
-        "- If STRUCTURED_JSON.connections is missing or empty, do not connect anything.\n\n"
+        "- Only create connections that are explicitly listed in STRUCTURED_JSON.units_unit_view "
+        "(every item of streams_in and streams_out of every unit).\n"
+        "- If units_unit_view is missing or empty, do not connect anything.\n\n"
         "CURRENT PYTHON SCRIPT (AFTER INSTANTIATION):\n"
         "----------------\n"
         "```python\n"
@@ -130,6 +141,43 @@ def _build_user_prompt(
         f"{instructions}\n"
         "[INSTRUCTIONS END]\n"
     ).strip()
+
+
+_CONNECT_CALL_RE = re.compile(
+    r"(?:connect|connect_column_feed|connect_column_product|skip)\(\s*"
+    r'"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"'
+)
+
+
+def _validate_step_6(step_6_code: str, unit_view_text: str) -> None:
+    """Every (unit, stream) pair of the unit view must appear exactly once."""
+    try:
+        view = json.loads(unit_view_text)
+    except Exception:
+        return
+    expected: list[tuple[str, str]] = []
+    for unit in view.get("units_unit_view", []) or []:
+        unit_id = unit.get("unit_id")
+        for stream in (unit.get("streams_in") or []) + (unit.get("streams_out") or []):
+            if unit_id and stream.get("id"):
+                expected.append((unit_id, stream["id"]))
+    if not expected:
+        return
+    if not _STEP6_HEADER_RE.search(step_6_code):
+        raise ValueError("Configuration output does not start with the Step 6 marker.")
+    found = _CONNECT_CALL_RE.findall(step_6_code)
+    missing = [pair for pair in expected if pair not in found]
+    extra = [pair for pair in found if pair not in expected]
+    duplicates = [pair for pair in set(found) if found.count(pair) > 1]
+    problems = []
+    if missing:
+        problems.append(f"streams never connected (unit, stream): {missing}")
+    if extra:
+        problems.append(f"connections not in units_unit_view: {extra}")
+    if duplicates:
+        problems.append(f"connected more than once: {duplicates}")
+    if problems:
+        raise ValueError("Configuration output is incomplete: " + "; ".join(problems))
 
 
 def _replace_step_6(instantiation_code: str, step_6_code: str) -> str:
@@ -149,13 +197,6 @@ def _replace_step_6(instantiation_code: str, step_6_code: str) -> str:
 def generate_configuration_script(
     state: ConfigurationState, model_name: str
 ) -> dict[str, Any]:
-    llm = ChatOllama(
-        model=model_name,
-        temperature=0,
-        num_ctx=30000,
-        num_predict=5000,
-    )
-
     instantiation_code = _load_text(state.instantiation_path)
     instructions = _load_instructions(state.instruction_paths)
     structured_json_text = _load_json_text(state.description)
@@ -167,15 +208,25 @@ def generate_configuration_script(
         instructions=instructions,
     )
 
-    response = llm.invoke(
-        [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
-        ]
+    raw_output = llm.chat(
+        model_name,
+        system_prompt,
+        user_prompt,
+        max_output_tokens=config.CONFIGURATION_MAX_OUTPUT_TOKENS,
+        log_label="configuration",
     )
-    raw_output = response.content or ""
 
     step_6_code = _extract_code(raw_output)
+    try:
+        _validate_step_6(step_6_code, structured_json_text)
+    except ValueError:
+        dump_path = os.path.join(
+            os.path.dirname(state.instantiation_path),
+            "configuration_failed_validation__step6.txt",
+        )
+        with open(dump_path, "w", encoding="utf-8") as file:
+            file.write(raw_output)
+        raise
     full_script = _replace_step_6(instantiation_code, step_6_code)
 
     return {

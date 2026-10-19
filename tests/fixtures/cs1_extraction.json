@@ -1,0 +1,90 @@
+{
+  "units": [
+    {
+      "id": "CRUDE_OIL_PUMP",
+      "name": "Crude Oil Pump",
+      "tags": [
+        "centrifugal pump"
+      ]
+    },
+    {
+      "id": "FRESH_WATER_PUMP",
+      "name": "Fresh Water Pump",
+      "tags": [
+        "centrifugal pump"
+      ]
+    },
+    {
+      "id": "MIXING_VALVE",
+      "name": "Mixing Valve",
+      "tags": [
+        "valve"
+      ]
+    },
+    {
+      "id": "ELECTROSTATIC_SEPARATOR",
+      "name": "Electrostatic Separator",
+      "tags": [
+        "horizontal pressure vessel",
+        "separator"
+      ]
+    }
+  ],
+  "feed_streams": [
+    {
+      "id": "S1",
+      "to_unit": "CRUDE_OIL_PUMP",
+      "name": "Crude oil",
+      "connect_point": "side"
+    },
+    {
+      "id": "S2",
+      "to_unit": "FRESH_WATER_PUMP",
+      "name": "Fresh water",
+      "connect_point": "side"
+    },
+    {
+      "id": "S3",
+      "to_unit": "MIXING_VALVE",
+      "name": "Demulsifier agent",
+      "connect_point": "side"
+    }
+  ],
+  "intermediate_streams": [
+    {
+      "id": "S4",
+      "from_unit": "CRUDE_OIL_PUMP",
+      "to_unit": "MIXING_VALVE",
+      "name": "Crude oil discharge",
+      "connect_point": "side"
+    },
+    {
+      "id": "S5",
+      "from_unit": "FRESH_WATER_PUMP",
+      "to_unit": "MIXING_VALVE",
+      "name": "Fresh water discharge",
+      "connect_point": "side"
+    },
+    {
+      "id": "S6",
+      "from_unit": "MIXING_VALVE",
+      "to_unit": "ELECTROSTATIC_SEPARATOR",
+      "name": "Oil-water mixture",
+      "connect_point": "side"
+    }
+  ],
+  "product_streams": [
+    {
+      "id": "S7",
+      "from_unit": "ELECTROSTATIC_SEPARATOR",
+      "name": "Desalted crude oil",
+      "connect_point": "overhead"
+    },
+    {
+      "id": "S8",
+      "from_unit": "ELECTROSTATIC_SEPARATOR",
+      "name": "Effluent Water",
+      "connect_point": "bottom"
+    }
+  ]
+}

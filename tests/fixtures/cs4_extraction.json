@@ -1,0 +1,52 @@
+{
+  "units": [
+    {"id": "V-101", "name": "Toluene Storage Drum", "tags": ["storage drum", "tank"]},
+    {"id": "P-101", "name": "Toluene Feed Pumps", "tags": ["centrifugal pump"]},
+    {"id": "E-101", "name": "Feed Preheater", "tags": ["heat exchanger", "preheater", "hps"]},
+    {"id": "H-101", "name": "Feed Heater", "tags": ["fired heater", "furnace"]},
+    {"id": "R-101", "name": "Reactor", "tags": ["packed bed reactor", "hydrodealkylation"]},
+    {"id": "C-101", "name": "Recycle Gas Compressor", "tags": ["compressor"]},
+    {"id": "E-102", "name": "Reactor Effluent Cooler", "tags": ["cooler", "heat exchanger", "cw"]},
+    {"id": "V-102", "name": "High-Pres. Phase Sep.", "tags": ["phase separator", "vertical vessel"]},
+    {"id": "V-103", "name": "Low-Pres. Phase Sep.", "tags": ["phase separator", "vertical vessel"]},
+    {"id": "E-103", "name": "Tower Feed Heater", "tags": ["heater", "heat exchanger", "lps"]},
+    {"id": "T-101", "name": "Benzene Column", "tags": ["distillation column", "tray column"]},
+    {"id": "E-104", "name": "Benzene Condenser", "tags": ["condenser", "heat exchanger", "cw"]},
+    {"id": "V-104", "name": "Reflux Drum", "tags": ["reflux drum", "horizontal vessel"]},
+    {"id": "P-102", "name": "Reflux Pumps", "tags": ["centrifugal pump"]},
+    {"id": "E-106", "name": "Benzene Reboiler", "tags": ["reboiler", "heat exchanger", "mps"]},
+    {"id": "E-105", "name": "Product Cooler", "tags": ["cooler", "heat exchanger", "cw"]}
+  ],
+  "feed_streams": [
+    {"id": "S1", "to_unit": "V-101", "name": "Toluene", "connect_point": "side"},
+    {"id": "S3", "to_unit": "E-101", "name": "Hydrogen", "connect_point": "side"}
+  ],
+  "intermediate_streams": [
+    {"id": "S2", "from_unit": "V-101", "to_unit": "P-101", "name": "Toluene Feed", "connect_point": "bottom"},
+    {"id": "S2A", "from_unit": "P-101", "to_unit": "E-101", "name": "Reactor Feed", "connect_point": "side"},
+    {"id": "S4", "from_unit": "E-101", "to_unit": "H-101", "name": "Preheated Feed", "connect_point": "side"},
+    {"id": "S6", "from_unit": "H-101", "to_unit": "R-101", "name": "Hot Feed", "connect_point": "side"},
+    {"id": "S7", "from_unit": "C-101", "to_unit": "R-101", "name": "Quench Stream", "connect_point": "side"},
+    {"id": "S5", "from_unit": "C-101", "to_unit": "E-101", "name": "Recycle Gas", "connect_point": "side"},
+    {"id": "S9", "from_unit": "R-101", "to_unit": "E-102", "name": "Reactor Effluent", "connect_point": "bottom"},
+    {"id": "S9A", "from_unit": "E-102", "to_unit": "V-102", "name": "Two-Phase Mixture", "connect_point": "side"},
+    {"id": "S8", "from_unit": "V-102", "to_unit": "C-101", "name": "Separator Overhead Gas", "connect_point": "overhead"},
+    {"id": "S18", "from_unit": "V-102", "to_unit": "V-103", "name": "Separator Liquid", "connect_point": "bottom"},
+    {"id": "S18A", "from_unit": "V-103", "to_unit": "E-103", "name": "Liquid Bottoms", "connect_point": "bottom"},
+    {"id": "S10", "from_unit": "E-103", "to_unit": "T-101", "name": "Column Feed", "connect_point": "side"},
+    {"id": "S13", "from_unit": "T-101", "to_unit": "E-104", "name": "Column Overhead", "connect_point": "overhead"},
+    {"id": "S13A", "from_unit": "E-104", "to_unit": "V-104", "name": "Condensed Overhead", "connect_point": "side"},
+    {"id": "S12", "from_unit": "V-104", "to_unit": "P-102", "name": "Reflux Drum Liquid", "connect_point": "bottom"},
+    {"id": "S12A", "from_unit": "P-102", "to_unit": "T-101", "name": "Reflux", "connect_point": "side"},
+    {"id": "S14", "from_unit": "P-102", "to_unit": "E-105", "name": "Product Flow", "connect_point": "side"},
+    {"id": "S11A", "from_unit": "T-101", "to_unit": "E-106", "name": "Column Bottoms Liquid", "connect_point": "bottom"},
+    {"id": "S11B", "from_unit": "E-106", "to_unit": "T-101", "name": "Reboiler Return", "connect_point": "side"},
+    {"id": "S11", "from_unit": "E-106", "to_unit": "V-101", "name": "Recycle Toluene", "connect_point": "bottom"}
+  ],
+  "product_streams": [
+    {"id": "S16", "from_unit": "V-102", "name": "Fuel Gas Purge", "connect_point": "overhead"},
+    {"id": "S17", "from_unit": "V-103", "name": "Overhead Gas", "connect_point": "overhead"},
+    {"id": "S19", "from_unit": "V-104", "name": "Fuel Gas", "connect_point": "overhead"},
+    {"id": "S15", "from_unit": "E-105", "name": "Benzene Product", "connect_point": "side"}
+  ]
+}

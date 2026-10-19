@@ -1,0 +1,16 @@
+### 1. PROCESS DESCRIPTION
+This process is a crude oil desalting unit designed to remove salts and water-soluble impurities from crude oil. The process begins on the left, where crude oil and fresh water are independently fed into the system via dedicated pumps. A demulsifier agent is injected into the crude oil discharge line to aid in the eventual breaking of the oil-water emulsion. 
+
+The crude oil (now containing the demulsifier) is combined with the fresh water stream. This combined stream flows through a mixing valve, which creates the necessary pressure drop and turbulence to ensure intimate contact between the water and the oil, allowing the water to absorb salts from the crude. The resulting mixture enters the electrostatic separator. Inside this vessel, an electric field is applied to promote the coalescence of small water droplets into larger ones. Due to density differences, the desalted crude oil rises to the top and exits as the primary product, while the heavier effluent water, containing the dissolved salts, settles at the bottom and is discharged.
+
+### 2. EQUIPMENT AND CONNECTIONS
+*   **Crude Oil Pump (Centrifugal type symbol)**: Receives the "Crude oil" feed. The outlet connects to a junction where the "Demulsifier agent" is injected, then continues toward the mixing valve.
+*   **Fresh Water Pump (Centrifugal type symbol)**: Receives the "Fresh water" feed. The outlet connects to the main process line downstream of the demulsifier injection point and upstream of the mixing valve.
+*   **Mixing Valve**: Receives the combined stream of crude oil, demulsifier, and fresh water. The outlet connects directly to the inlet of the electrostatic separator.
+*   **Electrostatic Separator**: A horizontal pressure vessel that receives the mixture from the mixing valve. It features two discharge points: a top outlet for "Desalted crude oil" and a bottom outlet for "Effluent Water".
+
+### 3. FINAL CONSISTENCY CHECK
+*   **Left-to-Right Flow**: The description follows the flow from the feed pumps on the left to the separator and product outlets on the right.
+*   **Equipment Inventory**: All visible equipment (two pumps, one mixing valve, and one electrostatic separator) are listed and described.
+*   **Connection Accuracy**: The sequence of demulsifier injection followed by water injection prior to the mixing valve is consistent with the diagram.
+*   **Label Consistency**: All stream labels (Crude oil, Demulsifier agent, Fresh water, Desalted crude oil, Effluent Water) match the provided image.

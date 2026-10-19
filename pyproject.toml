@@ -1,3 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sketch2sim"
+version = "0.2.0"
+description = "Sketch2Simulation: process sketch to executable Aspen HYSYS script via a multi-agent LLM pipeline (OpenAI API fork)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "openai>=2.0",
+    "pydantic>=2.0",
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "Pillow>=10.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.17,<0.18"]
+notebook = ["jupyterlab", "ipykernel"]
+
+[project.scripts]
+sketch2sim = "sketch2sim.pipeline:main"
+
+[tool.setuptools.packages.find]
+include = ["sketch2sim*"]
+
+[tool.setuptools.package-data]
+"sketch2sim.RAG" = ["components_list.xlsx", "mixture_recipes.txt"]
+"sketch2sim.instructions" = ["*.txt", "hysys_template_base.py"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 88
@@ -13,3 +51,6 @@ select = [
 ignore = [
     "E501", # line too long — handled by formatter
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
