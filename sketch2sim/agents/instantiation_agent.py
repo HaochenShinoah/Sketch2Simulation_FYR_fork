@@ -1,13 +1,18 @@
+"""Instantiation Agent (B2): unit operations and material streams (Steps 4-5)."""
+
+from __future__ import annotations
+
+import json
 import os
 import re
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
-from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph
 from pydantic import BaseModel
+
+from sketch2sim import config, llm
 
 _STEP4_MARKER = "# === Step 4: Add Unit Operations (Agent 2) ==="
 _STEP6_MARKER = "# === Step 6: Connect Streams (Agent 3) ==="
@@ -88,13 +93,61 @@ def _extract_steps_4_to_5_only(text: str) -> str:
     return block
 
 
+def _structure_ids(structured_json_text: str) -> tuple[list[str], list[str]]:
+    try:
+        data = json.loads(structured_json_text)
+    except Exception:
+        return [], []
+    units = [
+        u.get("id")
+        for u in data.get("units", [])
+        if isinstance(u, dict) and u.get("id")
+    ]
+    streams = [
+        s.get("id")
+        for group in ("feed_streams", "intermediate_streams", "product_streams")
+        for s in data.get(group, [])
+        if isinstance(s, dict) and s.get("id")
+    ]
+    return units, streams
+
+
+def _validate_block(block: str, structured_json_text: str) -> None:
+    """Every unit and stream of the structure must be created exactly once."""
+    unit_ids, stream_ids = _structure_ids(structured_json_text)
+    if not unit_ids and not stream_ids:
+        return
+    added_units = re.findall(r'add_unit\(\s*"((?:[^"\\]|\\.)*)"', block)
+    added_streams = re.findall(r'add_stream\(\s*"((?:[^"\\]|\\.)*)"', block)
+    problems = []
+    missing_units = [u for u in unit_ids if u not in added_units]
+    extra_units = [u for u in added_units if u not in unit_ids]
+    missing_streams = [s for s in stream_ids if s not in added_streams]
+    extra_streams = [s for s in added_streams if s not in stream_ids]
+    if missing_units:
+        problems.append(f"units without add_unit: {missing_units}")
+    if extra_units:
+        problems.append(f"add_unit keys not in STRUCTURED_JSON: {extra_units}")
+    if len(added_units) != len(set(added_units)):
+        problems.append("duplicate add_unit keys")
+    if missing_streams:
+        problems.append(f"streams without add_stream: {missing_streams}")
+    if extra_streams:
+        problems.append(f"add_stream keys not in STRUCTURED_JSON: {extra_streams}")
+    if len(added_streams) != len(set(added_streams)):
+        problems.append("duplicate add_stream keys")
+    if problems:
+        raise ValueError("Instantiation output is incomplete: " + "; ".join(problems))
+
+
 def _build_system_prompt() -> str:
     return (
         "You are the Instantiation Agent. Fill only Steps 4–5 of the provided HYSYS Python script.\n\n"
         "Rules:\n"
         "1. Do not change anything outside Steps 4–5.\n"
         "2. Use only units listed in STRUCTURED_JSON.units.\n"
-        "3. Streams must use exact names from feed_streams, intermediate_streams, and product_streams.\n"
+        "3. Streams must use the exact names from feed_streams, intermediate_streams, and product_streams; "
+        "if a name is empty or duplicated, use the stream id as the name.\n"
         "4. Use only valid HYSYS COM types listed in the instruction block.\n"
         "5. Do not connect streams to units in this step.\n"
         "6. Return only a single Python code block that starts with:\n"
@@ -137,13 +190,6 @@ def _replace_steps_4_to_5(basis_code: str, step_4_to_5_code: str) -> str:
 def generate_instantiation_script(
     state: InstantiationState, model_name: str
 ) -> dict[str, Any]:
-    llm = ChatOllama(
-        model=model_name,
-        temperature=0,
-        num_ctx=25000,
-        num_predict=5000,
-    )
-
     basis_code = _load_text(state.basis_path)
     instructions = _load_instructions(state.instruction_paths)
     structured_json_text = _load_json_text(state.description)
@@ -155,18 +201,18 @@ def generate_instantiation_script(
         instructions=instructions,
     )
 
-    response = llm.invoke(
-        [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
-        ]
+    raw_output = llm.chat(
+        model_name,
+        system_prompt,
+        user_prompt,
+        max_output_tokens=config.INSTANTIATION_MAX_OUTPUT_TOKENS,
+        log_label="instantiation",
     )
-
-    raw_output = response.content or ""
     code_text = _extract_code(raw_output)
 
     try:
         step_4_to_5_code = _extract_steps_4_to_5_only(code_text)
+        _validate_block(step_4_to_5_code, structured_json_text)
     except ValueError:
         dump_path = os.path.join(
             os.path.dirname(state.basis_path),

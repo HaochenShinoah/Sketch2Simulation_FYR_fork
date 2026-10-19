@@ -1,0 +1,25 @@
+# Run artefacts
+logs/
+outputs/
+*.hsc
+*.hsc.bak
+
+# RAG embedding cache and legacy root junction
+sketch2sim/RAG/cache/
+sketch2sim/RAG/chroma_components/
+/RAG/
+
+# Environment and secrets
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/

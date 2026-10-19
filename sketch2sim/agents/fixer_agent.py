@@ -1,9 +1,13 @@
+"""Fixer (B4.1): runtime-error-driven repair of the generated HYSYS script."""
+
+from __future__ import annotations
+
 from collections.abc import Iterable
 from pathlib import Path
 
-from langchain_ollama import ChatOllama
-from utils.agent_utils import read_text_file
-from utils.logging_utils import log_text
+from sketch2sim import config, llm
+from sketch2sim.utils.agent_utils import read_text_file
+from sketch2sim.utils.logging_utils import log_text
 
 FIXER_SYSTEM_PROMPT = """
 You are a code-fixing agent.
@@ -36,9 +40,7 @@ def _build_fixer_prompt(
     validator_issues: str,
     code_text: str,
 ) -> str:
-    return f"""{FIXER_SYSTEM_PROMPT}
-
----------------------------
+    return f"""---------------------------
 [INSTANTIATION_INSTRUCTIONS]
 <<<
 {instantiation_instructions_text}
@@ -66,37 +68,33 @@ def _build_fixer_prompt(
 """
 
 
-def _call_fixer_llm(
-    prompt: str,
-    model_name: str,
-    temperature: float = 0.0,
-) -> str:
-    llm = ChatOllama(
-        model=model_name,
-        temperature=temperature,
-        num_ctx=21000,
-        num_predict=5000,
-        top_p=1.0,
-    )
-
-    response = llm.invoke(prompt)
-    content = getattr(response, "content", response)
-
-    if isinstance(content, list):
-        content = "".join(part.get("text", "") for part in content)
-
-    text = str(content).strip()
-
+def _strip_code_fences(text: str) -> str:
+    text = (text or "").strip()
     if text.startswith("```"):
         parts = text.split("```")
         if len(parts) >= 2:
             inner = parts[1].strip()
             inner_lines = inner.splitlines()
-            if inner_lines and inner_lines[0].lower().startswith("python"):
+            if inner_lines and inner_lines[0].lower().startswith(("python", "py")):
                 inner = "\n".join(inner_lines[1:])
             text = inner.strip()
-
     return text
+
+
+def _call_fixer_llm(
+    prompt: str,
+    model_name: str,
+    temperature: float | None = 0.0,
+) -> str:
+    raw = llm.chat(
+        model_name,
+        FIXER_SYSTEM_PROMPT,
+        prompt,
+        temperature=temperature,
+        max_output_tokens=config.FIXER_MAX_OUTPUT_TOKENS,
+        log_label="fixer",
+    )
+    return _strip_code_fences(raw)
 
 
 def fix_code_text(
@@ -106,8 +104,8 @@ def fix_code_text(
     unit_view_json_str: str,
     validator_issues: str,
     code_text: str,
-    model_name: str = "qwen2.5-coder:latest",
-    temperature: float = 0.0,
+    model_name: str | None = None,
+    temperature: float | None = 0.0,
 ) -> str:
     prompt = _build_fixer_prompt(
         instantiation_instructions_text=instantiation_instructions_text,
@@ -119,7 +117,7 @@ def fix_code_text(
 
     return _call_fixer_llm(
         prompt=prompt,
-        model_name=model_name,
+        model_name=model_name or config.FIXER_MODEL,
         temperature=temperature,
     )
 
@@ -129,8 +127,8 @@ def fix_code_file(
     code_path: str | Path,
     unit_view_json_str: str,
     validator_issues: str,
-    model_name: str = "qwen2.5-coder:latest",
-    temperature: float = 0.0,
+    model_name: str | None = None,
+    temperature: float | None = 0.0,
     log_dir: str | Path | None = None,
     instantiation_instruction_paths: Iterable[str | Path],
     configuration_instruction_paths: Iterable[str | Path],
@@ -160,7 +158,7 @@ def fix_code_file(
     output_path.write_text(fixed_code, encoding="utf-8")
 
     if log_dir is not None:
-        log_text(log_dir, "runtime_fixed_code.py", fixed_code)
+        log_text(str(log_dir), "runtime_fixed_code.py", fixed_code)
 
     print(f"[Fixer] Wrote fixed code to: {output_path}")
     return output_path

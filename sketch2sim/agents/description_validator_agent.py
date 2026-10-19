@@ -1,15 +1,16 @@
+"""Description Validator Agent (A1.1): sanity check of the descriptor output."""
+
+from __future__ import annotations
+
 import json
-import os
 import re
 from typing import Any
 
-import requests
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field
 
-DESCRIPTION_VALIDATOR_TIMEOUT = int(os.getenv("DESCRIPTION_VALIDATOR_TIMEOUT", "900"))
-OLLAMA_CLOUD_HOST = os.getenv("OLLAMA_CLOUD_HOST", "http://localhost:11434")
+from sketch2sim import config, llm
 
 
 class DescriptionValidatorState(BaseModel):
@@ -78,6 +79,9 @@ def _safe_json_loads(text: str) -> dict[str, Any]:
             "cleaned_description": "",
         }
 
+    if not isinstance(data, dict):
+        data = {}
+
     allowed_keys = {
         "status",
         "issues",
@@ -99,52 +103,15 @@ def _safe_json_loads(text: str) -> dict[str, Any]:
 def run_description_validator(
     state: DescriptionValidatorState, model_name: str
 ) -> dict[str, Any]:
-    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
-    if not api_key:
-        raise OSError("OLLAMA_API_KEY is not set.")
-
-    payload = {
-        "model": model_name,
-        "stream": True,
-        "keep_alive": "10m",
-        "think": False,
-        "messages": [
-            {"role": "system", "content": DESCRIPTION_VALIDATOR_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps({"description": state.description})},
-        ],
-        "options": {
-            "temperature": 0.0,
-            "top_k": 1,
-            "top_p": 1.0,
-            "seed": 42,
-        },
-    }
-
-    response = requests.post(
-        f"{OLLAMA_CLOUD_HOST.rstrip('/')}/api/chat",
-        json=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        stream=True,
-        timeout=(30, DESCRIPTION_VALIDATOR_TIMEOUT),
+    raw = llm.chat(
+        model_name,
+        DESCRIPTION_VALIDATOR_SYSTEM_PROMPT,
+        json.dumps({"description": state.description}),
+        json_mode=True,
+        max_output_tokens=config.DESCRIPTION_VALIDATOR_MAX_OUTPUT_TOKENS,
+        log_label="description_validator",
     )
-    response.raise_for_status()
-
-    chunks = []
-    for line in response.iter_lines(decode_unicode=True):
-        if not line:
-            continue
-        data = json.loads(line)
-        message = data.get("message") or {}
-        content = message.get("content")
-        if isinstance(content, str) and content:
-            chunks.append(content)
-        if data.get("done"):
-            break
-
-    return {"validation": _safe_json_loads("".join(chunks).strip())}
+    return {"validation": _safe_json_loads(raw)}
 
 
 def build_description_validator_graph(model_name: str):

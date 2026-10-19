@@ -1,4 +1,6 @@
 import os
+import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -120,7 +122,9 @@ def run_merge_execute_with_runtime_fixer(
         "configuration_path": configuration_path,
         "output_path": combined_path,
     }
-    executor_state = ExecutorState(code_path=combined_path, log_dir=log_dir)
+    executor_state = ExecutorState(
+        code_path=combined_path, log_dir=log_dir, output_dir=output_dir
+    )
 
     base_fixer_kwargs = {
         "instantiation_instruction_paths": instantiation_instruction_paths,
@@ -149,6 +153,9 @@ def run_merge_execute_with_runtime_fixer(
             finish_success(log_dir, output_dir)
             return current_configuration_path
 
+        saved = _keep_attempt_case(exec_result, attempt)
+        if saved:
+            print(f"Case of attempt {attempt} kept at: {saved}")
         print("\nExecution failed. Calling fixer using runtime failure log...")
 
         current_configuration_path = handle_runtime_failure_and_fix(
@@ -163,5 +170,23 @@ def run_merge_execute_with_runtime_fixer(
         print("Retrying execution with fixed code...")
 
     raise RuntimeError(
-        f"HYSYS execution failed after {max_retries} runtime-fixer attempts. See logs in: {log_dir}"
+        f"HYSYS execution failed after {max_retries} runtime-fixer attempts. "
+        f"See logs in: {log_dir} (partially built cases, if any, are kept as "
+        "*_attemptN.hsc next to the generated scripts)."
     )
+
+
+def _keep_attempt_case(exec_result: dict, attempt: int) -> str | None:
+    """Copy the .hsc a failed attempt saved, so later attempts cannot overwrite it."""
+    match = re.search(r"Simulation saved at: (.+)", exec_result.get("stdout") or "")
+    if not match:
+        return None
+    source = Path(match.group(1).strip())
+    if not source.is_file():
+        return None
+    target = source.with_name(f"{source.stem}_attempt{attempt}{source.suffix}")
+    try:
+        shutil.copy2(source, target)
+    except OSError:
+        return None
+    return str(target)

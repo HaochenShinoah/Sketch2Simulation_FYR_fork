@@ -1,0 +1,247 @@
+INSTANTIATION INSTRUCTIONS - Aspen HYSYS COM, Steps 4-5 (simple_v5)
+======================================================================
+Recreated for the Sketch2Simulation fork (the original file is proprietary and
+was not released). Audience: the Instantiation Agent (a code model) and the
+Fixer. Read every section before writing code.
+
+0. WHAT YOU ARE DOING
+---------------------
+You turn STRUCTURED_JSON (the units and material streams recovered from the
+process sketch) into the two script blocks
+    # === Step 4: Add Unit Operations (Agent 2) ===
+    # === Step 5: Add Material Streams (Agent 2) ===
+of a Python script that builds the flowsheet in Aspen HYSYS through COM
+(pywin32). The script runs top to bottom. Everything you need already exists
+above Step 4 and MUST be used as is:
+    flowsheet                          HYSYS main flowsheet (case.Flowsheet)
+    TYPES                              dict: equipment category -> HYSYS type strings
+    add_unit(key, name, TYPES[cat])    creates units[key] with the first type string HYSYS accepts
+    add_stream(key, name)              creates streams[key] (a material stream)
+Do not redefine them. Do not call HYSYS COM methods yourself in Steps 4-5.
+
+1. OUTPUT CONTRACT
+------------------
+1.1 Return exactly one Python code block and nothing outside it.
+1.2 Its first line is:   # === Step 4: Add Unit Operations (Agent 2) ===
+1.3 It contains the line: # === Step 5: Add Material Streams (Agent 2) ===
+1.4 It ends after the last add_stream line. Never write the Step 6 marker
+    (# === Step 6: Connect Streams (Agent 3) ===) or anything after it.
+1.5 Step 4 begins with   units = {}    Step 5 begins with   streams = {}
+1.6 One add_unit(...) line per unit in STRUCTURED_JSON.units, same order as the JSON.
+1.7 One add_stream(...) line per stream, in the order feed_streams, intermediate_streams,
+    product_streams, same order as the JSON inside each list.
+1.8 Nothing else: no imports, no Dispatch, no connections (that is Step 6), no stream
+    specifications (temperature, pressure, flow, composition), no energy streams,
+    no solver calls, no SaveAs, no try/except, no new functions, no loops over the
+    JSON (write every call out explicitly so each object is visible and fixable).
+1.9 "No explanations" means no prose outside the code block. Short Python comments
+    inside the block are welcome (what the unit is, why the category).
+
+2. UNIT OPERATIONS (Step 4)
+---------------------------
+2.1 Call pattern, exactly:
+        add_unit("<unit id>", "<HYSYS display name>", TYPES["<category>"])
+    <unit id>       the "id" field, copied character for character (Step 6 uses it as key).
+    <display name>  the "name" field; fall back to the id when the name is empty.
+                    Allowed characters: letters, digits, space, - _ . ( ) +  ; drop the rest.
+                    Names must be unique in the flowsheet: if two units share a name,
+                    append the id in parentheses, e.g. "Cooler (E-105)".
+    <category>      one key of TYPES, chosen with table 2.3.
+2.2 Create every unit in STRUCTURED_JSON.units and nothing else. Units that were absorbed
+    into a column (listed in a column's hysys_overrides.skip_unit_ids) are no longer in
+    the list: never create a separate condenser, reflux drum, reflux pump or reboiler for
+    a column, and never add mixers, tees, recycle blocks, valves or pumps of your own.
+    Tags and names decide the category; the stream count is used only where this table
+    says so (heat exchangers, 3-phase separators, unknown equipment). A storage drum with
+    two inlets is still a "tank", not a mixer.
+2.3 Category table. First match wins; look at the tags, then the name, then the id.
+    When words are ambiguous, count the unit's inlet and outlet streams in STRUCTURED_JSON.
+
+    EQUIPMENT IN THE SKETCH (tags / name)                                   -> TYPES key
+    ----------------------------------------------------------------------------------------
+    pump, feed pump, booster, circulation pump, reflux pump (standalone)    -> "pump"
+    compressor, blower, recycle gas compressor                              -> "compressor"
+    expander, turbo-expander, turbine                                       -> "expander"
+    valve, mixing valve, control/throttle/let-down valve, JT valve          -> "valve"
+    mixer, junction, header, mixing point, any unit with id MIXER_TO_*       -> "mixer"
+    tee, splitter, divider, purge split, bypass split,
+      any unit with id TEE_FROM_* (inserted by the normaliser)                -> "tee"
+    heater, preheater, pre-heat train, steam heater, economiser,
+      superheater, reboiler drawn as standalone equipment (1 in / 1 out)    -> "heater"
+    cooler, chiller, aftercooler, trim/product/effluent cooler,
+      condenser drawn as standalone equipment (1 in / 1 out)                -> "cooler"
+    heat exchanger exchanging TWO process streams
+      (2 inlets AND 2 outlets in STRUCTURED_JSON)                            -> "heat_exchanger"
+      A unit tagged "heat exchanger" with ONE inlet and ONE outlet is a heater
+      (or a cooler when its name/tags say cooler, condenser, chiller, CW):
+      the stream count decides, not the tag.
+    air cooler, fin-fan cooler                                              -> "air_cooler"
+    fired heater, furnace, crude heater (H-xxx), heater with flue gas       -> "fired_heater"
+    separator, flash drum, knock-out drum, phase separator, settler,
+      desalter, electrostatic separator, coalescer, accumulator, wash
+      vessel, caustic prewash, water wash, salt bed, clay bed, filter
+      vessel, any vertical/horizontal vessel with one or two outlets        -> "separator"
+    three-phase separator, decanter, any vessel tagged 3-phase / three-phase,
+      or with TWO liquid product streams (bottom/side) besides the vapour   -> "separator_3phase"
+      (two overhead outlets + one bottom is still "separator"; Step 6 reports
+      the outlet that finds no free port)
+    tank, storage tank, storage drum, surge drum, day tank                  -> "tank"
+    reactor of any kind unless stated otherwise (fixed bed, packed bed,
+      catalytic, Merox, hydrotreater, hydrodealkylation, conversion)        -> "reactor_conversion"
+    equilibrium reactor                                                      -> "reactor_equilibrium"
+    Gibbs reactor                                                            -> "reactor_gibbs"
+    CSTR, stirred-tank reactor                                               -> "reactor_cstr"
+    PFR, plug-flow / tubular reactor                                         -> "reactor_pfr"
+    distillation column, fractionator, tower, crude column, stabiliser,
+      splitter column, stripper, absorber, scrubber, contactor             -> see 2.4 (column_*)
+    shortcut column                                                          -> "column_shortcut"
+    component splitter, membrane, PSA, adsorber, molecular sieve,
+      black-box separation                                                   -> "component_splitter"
+    pipe, pipeline segment                                                   -> "pipe"
+    recycle block, adjust, set, spreadsheet                                  -> "recycle" / "adjust" / "set" / "spreadsheet"
+                                                       (only if STRUCTURED_JSON lists them as units)
+
+    Unknown equipment: do NOT invent a type. Decide by topology:
+      1 in / 1 out  -> "heater" if the name suggests heating or cooling,
+                       "valve" if it suggests pressure change, otherwise "separator"
+      N in / 1 out  -> "mixer"
+      1 in / 2 out  -> "separator"        1 in / 3 out -> "separator_3phase"
+      1 in / N out, same phase, N > 2 -> "tee"          N in / N out -> "separator"
+
+2.4 Columns (one unit = one add_unit line). Read the unit's hysys_overrides first, then
+    its name/tags:
+      integrated_condenser or integrated_overhead_system  AND  integrated_reboiler  -> "column_distillation"
+      only integrated_reboiler                                                    -> "column_reboiled_absorber"
+      only integrated_condenser or integrated_overhead_system                     -> "column_refluxed_absorber"
+      no hysys_overrides and the name/tags say absorber, scrubber, contactor,
+        stripper, wash column, extractor                                          -> "column_absorber"
+      no hysys_overrides otherwise (distillation column, fractionator, tower,
+        stabiliser, splitter column, crude column, debutaniser, any column whose
+        condenser/reboiler were simply not drawn)                                 -> "column_distillation"
+    The HYSYS column template already contains the tray section, condenser and reboiler,
+    which is why those pieces were folded into the column by the normaliser.
+2.5 Example lines
+        add_unit("CRUDE_OIL_PUMP", "Crude Oil Pump", TYPES["pump"])
+        add_unit("MIXER_TO_MIXING_VALVE", "Mixer to MIXING_VALVE", TYPES["mixer"])
+        add_unit("E-101", "Feed Preheater", TYPES["heater"])            # 1 process stream in, 1 out
+        add_unit("H-101", "Feed Heater", TYPES["fired_heater"])         # furnace
+        add_unit("V-102", "High-Pres. Phase Sep.", TYPES["separator"])
+        add_unit("T-101", "Benzene Column", TYPES["column_distillation"])
+
+3. MATERIAL STREAMS (Step 5)
+----------------------------
+3.1 Call pattern, exactly:
+        add_stream("<stream id>", "<HYSYS stream name>")
+    <stream id>    the "id" field, copied exactly (Step 6 uses it as key).
+    <stream name>  the "name" field. If it is empty or already used by another stream,
+                   use the id; if that is also taken, use "<name> (<id>)".
+                   Same character rules as unit names.
+3.2 Create every stream of feed_streams, intermediate_streams and product_streams exactly
+    once. Streams rewritten by the normaliser (ids like S_MIXER_TO_* or S_TEE_FROM_*, or
+    streams whose from_unit/to_unit became a column) are ordinary streams: create them.
+3.3 Do not create energy streams, utility streams, recycle blocks or any stream that is
+    not in STRUCTURED_JSON. Do not set any property on a stream.
+
+4. HYSYS COM FACTS BEHIND THE HELPERS (reference only; never copy into your output)
+------------------------------------------------------------------------------------
+4.1 flowsheet.Operations.Add(name, type_string) creates a unit operation and
+    flowsheet.MaterialStreams.Add(name) a material stream; both return the COM object
+    (None means HYSYS refused). add_unit / add_stream wrap exactly these calls.
+4.2 Verified HYSYS type strings (TypeName of real objects, incl. live checks on V14):
+    pumpop, valveop, mixerop, teeop, heaterop, coolerop, heatexop, compressor,
+    flashtank (2-phase separator; "separatorop" does not exist on V14),
+    dynamicfiredheaterop (fired heater), conversionreactorop, distillation (column
+    template with condenser and reboiler), absorber, shdistop / fractop (shortcut column
+    and component splitter: the two sources disagree, both are tried), recycle, adjust,
+    setop, spreadsheetop, streamcutterop. Matching is case-insensitive ("MixerOp" works).
+4.3 Candidate strings tried in order by add_unit for the other categories: separator3op,
+    tankop, expandop, aircoolerop, equilibriumreactorop, gibbsreactorop, cstrop, pfrop,
+    reboiledabsorber, refluxedabsorber, pipeseg (each with fallbacks). add_unit also tries
+    the argument orders Add(name, type) / Add(type, name) / Add(type) + rename. If nothing
+    is accepted, add_unit raises with every error text; the Fixer then edits TYPES or picks
+    another category. A unit is never dropped.
+4.4 A column created from the template exposes col.ColumnFlowsheet with the sub-operations
+    "Main Tower" (older HYSYS: "Main TS"), "Condenser" and "Reboiler".
+4.5 Object names are unique per flowsheet; spaces, hyphens, underscores, digits and
+    parentheses are safe. Energy streams are not needed to build and save a case.
+4.6 Basis facts (for the Fixer): the property package is set in Step 2 through the
+    variable property_package; the COM spelling of Peng-Robinson is "PengRob" (verified
+    on V14/V15); ensure_property_package() re-applies known alternative spellings when
+    the read-back differs. StartBasisChange()/EndBasisChange() bracket the basis edits.
+    Component names must be HYSYS library names ("H2O" is also accepted as "Water").
+    The solver is held (case.Solver.CanSolve = False) while the flowsheet is built and
+    released right before SaveAs.
+
+5. WORKED EXAMPLE - case study 1, crude oil desalting (paper, Figure 7)
+----------------------------------------------------------------------
+STRUCTURED_JSON (abridged):
+  units:
+    CRUDE_OIL_PUMP "Crude Oil Pump" [centrifugal pump]
+    FRESH_WATER_PUMP "Fresh Water Pump" [centrifugal pump]
+    MIXER_TO_MIXING_VALVE "Mixer to MIXING_VALVE" [mixer]          (inserted by the normaliser)
+    MIXING_VALVE "Mixing Valve" [valve]
+    ELECTROSTATIC_SEPARATOR "Electrostatic Separator" [horizontal pressure vessel, separator]
+  feed_streams:         S1 "Crude oil" -> CRUDE_OIL_PUMP; S2 "Fresh water" -> FRESH_WATER_PUMP;
+                        S3 "Demulsifier agent" -> MIXER_TO_MIXING_VALVE
+  intermediate_streams: S4 "Crude oil discharge" CRUDE_OIL_PUMP -> MIXER_TO_MIXING_VALVE;
+                        S5 "Fresh water discharge" FRESH_WATER_PUMP -> MIXER_TO_MIXING_VALVE;
+                        S6 "Oil-water mixture" MIXING_VALVE -> ELECTROSTATIC_SEPARATOR;
+                        S_MIXER_TO_MIXING_VALVE "Mixer outlet to MIXING_VALVE" MIXER_TO_MIXING_VALVE -> MIXING_VALVE
+                        (the normaliser appends the streams it creates at the end of the list)
+  product_streams:      S7 "Desalted crude oil" from ELECTROSTATIC_SEPARATOR (overhead);
+                        S8 "Effluent Water" from ELECTROSTATIC_SEPARATOR (bottom)
+
+Expected answer (the whole answer, nothing else):
+
+```python
+# === Step 4: Add Unit Operations (Agent 2) ===
+units = {}
+add_unit("CRUDE_OIL_PUMP", "Crude Oil Pump", TYPES["pump"])                         # centrifugal pump
+add_unit("FRESH_WATER_PUMP", "Fresh Water Pump", TYPES["pump"])                     # centrifugal pump
+add_unit("MIXER_TO_MIXING_VALVE", "Mixer to MIXING_VALVE", TYPES["mixer"])          # mixing point before the valve
+add_unit("MIXING_VALVE", "Mixing Valve", TYPES["valve"])                            # valve
+add_unit("ELECTROSTATIC_SEPARATOR", "Electrostatic Separator", TYPES["separator"])  # vessel, overhead + bottom outlet
+
+# === Step 5: Add Material Streams (Agent 2) ===
+streams = {}
+add_stream("S1", "Crude oil")
+add_stream("S2", "Fresh water")
+add_stream("S3", "Demulsifier agent")
+add_stream("S4", "Crude oil discharge")
+add_stream("S5", "Fresh water discharge")
+add_stream("S6", "Oil-water mixture")
+add_stream("S_MIXER_TO_MIXING_VALVE", "Mixer outlet to MIXING_VALVE")
+add_stream("S7", "Desalted crude oil")
+add_stream("S8", "Effluent Water")
+```
+
+6. COLUMN EXAMPLE - case study 4, aromatics plant (paper, Figure 10)
+--------------------------------------------------------------------
+  unit T-101 "Benzene Column" [distillation column, tray column]
+  hysys_overrides: integrated_reboiler {unit_id: E-106}, integrated_overhead_system
+                   {unit_ids: [E-104, V-104, P-102]}, skip_unit_ids [E-106, E-104, V-104, P-102]
+  -> one line:   add_unit("T-101", "Benzene Column", TYPES["column_distillation"])
+  Streams that used to leave E-104 / V-104 / P-102 / E-106 now leave T-101 in STRUCTURED_JSON
+  (e.g. S14 "Product Flow", S19 "Fuel Gas", S11 "Recycle Toluene"): create them with
+  add_stream like any other stream. Do not create E-104, V-104, P-102 or E-106: they are
+  no longer in STRUCTURED_JSON.units.
+  The normaliser folds the whole overhead system only when the chain condenser -> reflux
+  drum -> reflux pump -> column is drawn and named as such. When it recognised only the
+  condenser, hysys_overrides reads integrated_condenser {unit_id: E-104} and the drum and
+  pump are still listed in STRUCTURED_JSON.units: then create them like any other unit
+  (V-104 "Reflux Drum" -> TYPES["separator"], P-102 "Reflux Pumps" -> TYPES["pump"]).
+  Rule 2.2 always wins: the unit list in STRUCTURED_JSON decides what exists.
+
+7. SELF-CHECK BEFORE ANSWERING
+------------------------------
+  [ ] number of add_unit lines == number of units in STRUCTURED_JSON; ids copied exactly; order kept
+  [ ] every stream id appears exactly once in an add_stream line; display names unique
+  [ ] every TYPES["..."] key exists: pump compressor expander valve mixer tee heater cooler
+      heat_exchanger air_cooler fired_heater separator separator_3phase tank reactor_conversion
+      reactor_equilibrium reactor_gibbs reactor_cstr reactor_pfr column_distillation
+      column_absorber column_reboiled_absorber column_refluxed_absorber column_shortcut
+      component_splitter recycle adjust set spreadsheet pipe
+  [ ] the block starts with the Step 4 marker, contains the Step 5 marker, contains no
+      Step 1/2/3/6/7 marker, and nothing follows the last add_stream line
+  [ ] Steps 1-3 of the script were not touched, even if their content looks unrelated
+  [ ] no Operations.Add / MaterialStreams.Add / connections / specifications written by hand

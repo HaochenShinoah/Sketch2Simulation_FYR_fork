@@ -1,0 +1,254 @@
+CONFIGURATION INSTRUCTIONS - Aspen HYSYS COM, Step 6 (simple_v5)
+==================================================================
+Recreated for the Sketch2Simulation fork (the original file is proprietary and
+was not released). Audience: the Configuration Agent (a code model) and the
+Fixer. Read every section before writing code.
+
+0. WHAT YOU ARE DOING
+---------------------
+You attach every material stream listed in STRUCTURED_JSON.units_unit_view to the
+inlet and outlet ports of the HYSYS unit operations that Step 4 created, by
+filling the block
+    # === Step 6: Connect Streams (Agent 3) ===
+Use only the helpers already defined in the script (Step 3b):
+    connect(unit_key, stream_key, role)                   ordinary units; roles in section 2-3
+    connect_column_feed(unit_key, stream_key)             columns, every stream in streams_in
+    connect_column_product(unit_key, stream_key, role)    columns; role in section 4
+    skip(unit_key, stream_key, reason)                    a listed stream that has no free port
+Role names denote HYSYS ports, not physical phases: "vapour_out" is the top outlet
+(VapourProduct) and "liquid_out" the bottom outlet (LiquidProduct) of a vessel. A desalter
+or a liquid-liquid settler built as a 2-phase separator therefore sends its lighter
+(overhead) liquid through "vapour_out"; this is what the paper's flowsheets do.
+unit_key / stream_key are the "unit_id" / "id" strings of the JSON (the keys of the
+units / streams dictionaries). The HYSYS category of each unit is visible in Step 4:
+add_unit(key, name, TYPES["<category>"]).
+
+1. OUTPUT CONTRACT
+------------------
+1.1 Return only the Step 6 block as plain text: no ``` fences, no language tag, no prose
+    before or after, and do not repeat Steps 1-5 or 7 (the pipeline splices your block into
+    the script shown above). The block starts with the exact line
+    # === Step 6: Connect Streams (Agent 3) ===
+    and ends right before   # === Step 7: Save Simulation ===   (do not write that line;
+    Step 7 already calls finish_connections()). Do not keep the two placeholder comment
+    lines of the current Step 6 block.
+1.2 Group the connections per unit, in the order of units_unit_view. Each group starts with
+        # --- <unit_id> (<unit_name>) ---
+    (unit_name copied verbatim, even when it contains parentheses itself).
+    A unit without streams gets only this header line.
+1.3 Inside a group: all streams_in first, then all streams_out, in JSON order.
+1.4 Every listed stream is connected exactly once per unit, and nothing that is not listed.
+    Do not invent product or feed streams a HYSYS unit "would need" (for example the
+    missing vapour product of a reactor with a single effluent): HYSYS only reports such
+    gaps when solving, and this script builds the case without solving it.
+    An intermediate stream appears in streams_out of its source unit and in streams_in of
+    its destination: connect it at both ends (one line in each group). A feed stream
+    (from_unit null) is connected only at its to_unit; a product stream (to_unit null)
+    only at its from_unit.
+1.5 Forbidden: creating units or streams, setting specifications, energy streams, imports,
+    Dispatch, loops over the JSON, redefining helpers, try/except, SaveAs, calling
+    finish_connections() yourself, touching Steps 1-5 or 7.
+1.6 Short comments are welcome (why a role was chosen).
+
+2. ROLE BY UNIT CATEGORY  (role for each streams_in | role for each streams_out)
+---------------------------------------------------------------------------------
+    pump, compressor, expander, valve, heater, cooler, air_cooler, recycle, pipe
+        "single_in" | "single_out"
+        Exactly one of each (the normaliser inserts a MIXER_TO_* mixer or a TEE_FROM_* tee
+        when a sketch sends several streams into or out of such a unit). If the JSON still
+        lists more, connect the first and write
+            skip("<unit_id>", "<stream id>", "single-port unit, no free port")
+    mixer
+        "multi_in" for every inlet | "mixer_out" for the single outlet
+    tee (including TEE_FROM_* units inserted by the normaliser)
+        "tee_in" for the single inlet | "tee_out" for every outlet
+    separator, tank, reactor_conversion, reactor_equilibrium, reactor_gibbs, reactor_cstr, reactor_pfr
+        "multi_in" for every inlet (the connect_point of an inlet is irrelevant) | outlets by
+        connect_point, section 3 (a tank with a single outlet: "liquid_out" whatever its
+        connect_point; a second tank outlet named vent / vapour / gas: "vapour_out")
+    separator_3phase
+        "multi_in" | overhead -> "vapour_out"; of the two liquid outlets, the one named
+        water / aqueous / brine / heavy / drawn lowest -> "heavy_liquid_out", the other -> "light_liquid_out"
+    heat_exchanger
+        pair inlet i with outlet i (same position in the lists, or matching names);
+        pair 1 -> "tube_in" / "tube_out", pair 2 -> "shell_in" / "shell_out".
+        A single pair (only the process side is drawn) uses the tube side only.
+    component_splitter
+        "splitter_in" | overhead -> "splitter_overhead", bottom -> "splitter_bottom"
+    fired_heater
+        process inlet -> "fired_in", process outlet -> "fired_out",
+        a stream named flue gas / stack gas -> "flue_gas_out", air -> "air_in", fuel -> "fuel_in"
+    column_distillation, column_absorber, column_reboiled_absorber, column_refluxed_absorber, column_shortcut
+        section 4 (never use connect() on a column)
+
+3. OUTLET ROLE FROM connect_point (separators, tanks, reactors)
+----------------------------------------------------------------
+    overhead         -> "vapour_out"   (also for a liquid-named overhead stream such as
+                        "Salt Water" leaving the top of a 2-phase desalter: the vessel has
+                        only a top and a bottom port; say so in a comment, do not change
+                        the unit)
+    bottom           -> "liquid_out"
+    side / unknown   -> "vapour_out" if the stream name contains gas, vapour, vapor, vent,
+                        off-gas, fuel gas or overhead; otherwise "liquid_out"
+    A port is used once per unit. If two outlets map to the same role, give the second the
+    other role (vapour_out <-> liquid_out) when it is still free and say so in a comment.
+    If a unit that is not a 3-phase separator has more outlets than free ports (e.g. two
+    overhead gas outlets on a 2-phase separator), connect the best matches and write
+        skip("<unit_id>", "<stream id>", "no free port: second overhead outlet")
+    for the rest, so the summary lists it.
+    Inlets: separators, tanks and reactors accept any number of inlets (multi_in); never
+    add a mixer.
+    Reactors: a reactor template has the same two ports (vapour_out = top, liquid_out =
+    bottom). The phase of the reaction decides before the drawing does: a single
+    effluent of a gas-phase reaction (hydrogen co-feed, cracking, dealkylation,
+    reforming, oxidation, combustion, or a gas-like stream name) is "vapour_out" even when
+    it is drawn at the bottom; a single effluent of a liquid-phase reaction is
+    "liquid_out" even when drawn at the top or side; say so in a comment. Two effluents
+    follow connect_point as for separators.
+    A stream in streams_in that carries integrated_via (e.g. recycle toluene coming from
+    an absorbed reboiler) is an ordinary inlet of the current unit: use the unit's inlet
+    role; integrated_via only documents where it came from.
+
+4. COLUMNS
+----------
+4.1 Feeds: one line per stream in streams_in
+        connect_column_feed("<unit_id>", "<stream id>")
+    (the helper places the feed on the middle stage; add stage=<n> only when the sketch
+    states the feed stage).
+4.2 Products: one line per stream in streams_out
+        connect_column_product("<unit_id>", "<stream id>", "<role>")
+    Choose the role in this order of precedence:
+      a) integrated_via is set on the stream (it left an absorbed condenser / reflux drum /
+         reflux pump / reboiler; see hysys_overrides of the unit). integrated_via always
+         beats connect_point (a "side" stream drawn from the reflux drum is still a
+         distillate):
+            via the reboiler                                             -> "bottoms"
+            via the condenser / overhead system, gas-like name
+              (gas, vapour, vapor, vent, off-gas, fuel gas, purge)       -> "overhead_vapour"
+            via the condenser / overhead system, water-like name
+              (water, aqueous, sour water, waste water, brine)           -> "water_draw"
+            via the condenser / overhead system, otherwise               -> "distillate"
+      b) connect_point overhead, gas-like name (gas, vapour, vapor, vent, off-gas, fuel gas,
+         purge, overhead gas)                                    -> "overhead_vapour"
+      c) connect_point overhead, otherwise (distillate, naphtha, product, light ends),
+         or the only overhead stream of the column                -> "distillate"
+      d) connect_point bottom, water-like name (water, aqueous, sour water, waste water)
+                                                                 -> "water_draw"
+      e) connect_point bottom (residue, bottoms, heavy, recycle, any other)
+                                                                 -> "bottoms"
+      f) connect_point side (kero, diesel, AGO, side cut, pumparound draw)
+                                                                 -> "side_draw"
+    Two overhead streams: the gas-like one is "overhead_vapour", the other "distillate".
+    Two bottom streams: the water-like one is "water_draw", the other "bottoms". Each of
+    overhead_vapour, distillate, water_draw and bottoms is used at most once per column;
+    keep the first stream for a role and skip(...) the second. "side_draw" may be used for
+    any number of streams (one line per side cut); the helper records side draws as a known
+    limitation of the COM column template (the paper left them unconnected too), never as
+    a failure.
+4.3 Never connect reflux, reboiler-return or other internal streams of the overhead or
+    reboiler system: the normaliser removed them, and the template column already
+    contains its condenser and reboiler. All external streams of the absorbed equipment
+    are connected to the column itself.
+    The normaliser folds the overhead system only when the chain condenser -> reflux
+    drum -> reflux pump -> column is drawn and named as such. When a reflux drum or
+    reflux pump is still a unit of its own, its streams are ordinary streams: the drum is
+    a separator, the pump a pump, and the reflux return that enters the column is a feed
+    on the top stage:
+        connect_column_feed("<unit_id>", "<stream id>", stage=1)   # reflux return
+    It is listed in streams_in, so it is connected, never skipped.
+
+5. HYSYS COM FACTS BEHIND THE HELPERS (reference only; never copy into your output)
+------------------------------------------------------------------------------------
+    single-port operations (pump, valve, compressor, heater, cooler, recycle):
+        op.FeedStream / op.ProductStream / op.EnergyStream = <stream object>
+        (verified live on HYSYS V14: assigning the stream OBJECT works; a name string or
+        None raises a type mismatch)
+    mixer:            Feeds.Add(stream) and Product        tee: Feed and Products.Add(stream)
+        (Feeds.Add exists in some builds and not in others; the helper falls back to the
+        single-port members)
+    separators (flashtank), tanks, reactors: Feeds.Add(stream) / FeedStream; products
+        VapourProduct / LiquidProduct (3-phase: LightLiquidProduct / HeavyLiquidProduct),
+        with Products.Add and ProductStream as last resorts  (candidates, tried in order)
+    heat exchanger:   TubeSideFeed / TubeSideProduct / ShellSideFeed / ShellSideProduct (verified)
+    component splitter: Inlets / OverheadOutlets / BottomOutlets                       (verified)
+    column:  col.ColumnFlowsheet.Operations -> tray section "Main Tower" / "Main TS" (found by
+             TypeName containing "tray"), "Condenser", "Reboiler"; feeds via
+             Main Tower.SpecifyFeedLocation(stream, stage) or AddFeedStream(name, stage, False);
+             NumberOfTrays; side draws via AddDrawStream(stage, "Liquid", name) (V14) when the
+             build supports it, otherwise recorded as a known limitation.
+    Each helper tries its candidate members in order and logs the ones that failed; helpers
+    never raise. finish_connections() (called in Step 7, after SaveAs) prints the summary and
+    exits with code 2 when a listed connection could not be made, so the Fixer receives the
+    exact error texts and can choose another role or member.
+
+6. WORKED EXAMPLE - case study 1, crude oil desalting (paper, Figure 7)
+----------------------------------------------------------------------
+units_unit_view (abridged): CRUDE_OIL_PUMP in S1 / out S4; FRESH_WATER_PUMP in S2 / out S5;
+MIXER_TO_MIXING_VALVE in S3,S4,S5 / out S_MIXER_TO_MIXING_VALVE; MIXING_VALVE in
+S_MIXER_TO_MIXING_VALVE / out S6; ELECTROSTATIC_SEPARATOR in S6 / out S7 (overhead), S8 (bottom)
+
+Step 6 block of the answer:
+
+# === Step 6: Connect Streams (Agent 3) ===
+# --- CRUDE_OIL_PUMP (Crude Oil Pump) ---
+connect("CRUDE_OIL_PUMP", "S1", "single_in")
+connect("CRUDE_OIL_PUMP", "S4", "single_out")
+# --- FRESH_WATER_PUMP (Fresh Water Pump) ---
+connect("FRESH_WATER_PUMP", "S2", "single_in")
+connect("FRESH_WATER_PUMP", "S5", "single_out")
+# --- MIXER_TO_MIXING_VALVE (Mixer to MIXING_VALVE) ---
+connect("MIXER_TO_MIXING_VALVE", "S3", "multi_in")
+connect("MIXER_TO_MIXING_VALVE", "S4", "multi_in")
+connect("MIXER_TO_MIXING_VALVE", "S5", "multi_in")
+connect("MIXER_TO_MIXING_VALVE", "S_MIXER_TO_MIXING_VALVE", "mixer_out")
+# --- MIXING_VALVE (Mixing Valve) ---
+connect("MIXING_VALVE", "S_MIXER_TO_MIXING_VALVE", "single_in")
+connect("MIXING_VALVE", "S6", "single_out")
+# --- ELECTROSTATIC_SEPARATOR (Electrostatic Separator) ---
+connect("ELECTROSTATIC_SEPARATOR", "S6", "multi_in")
+connect("ELECTROSTATIC_SEPARATOR", "S7", "vapour_out")   # overhead: desalted crude oil
+connect("ELECTROSTATIC_SEPARATOR", "S8", "liquid_out")   # bottom: effluent water
+
+7. COLUMN EXAMPLE - case study 4, T-101 Benzene Column after coupling (paper, Figure 10)
+---------------------------------------------------------------------------------------
+streams_in:  S10 "Column Feed" (side)
+streams_out: S14 "Product Flow" (side, integrated_via P-102),
+             S11 "Recycle Toluene" (bottom, integrated_via E-106),
+             S19 "Fuel Gas" (overhead, integrated_via V-104)
+
+# --- T-101 (Benzene Column) ---
+connect_column_feed("T-101", "S10")
+connect_column_product("T-101", "S14", "distillate")        # product flow via the reflux pumps (JSON order kept)
+connect_column_product("T-101", "S11", "bottoms")           # recycle toluene via the reboiler
+connect_column_product("T-101", "S19", "overhead_vapour")   # fuel gas from the reflux drum
+
+Crude column with side cuts (case study 3), streams_in S9 "F-106"; streams_out S16 "Off-gas"
+(overhead, via CONDENSER), S17 "Waste Water" (bottom, via CONDENSER), S18 "Naphtha" (side, via
+CONDENSER), S19 "Kero" / S20 "Diesel" / S21 "AGO" (side, no integrated_via), S22 "Residue"
+(bottom, via REBOILER):
+
+# --- ATMOSPHERIC_DISTILLATION_COLUMN (Atmospheric Distillation Column) ---
+connect_column_feed("ATMOSPHERIC_DISTILLATION_COLUMN", "S9")
+connect_column_product("ATMOSPHERIC_DISTILLATION_COLUMN", "S16", "overhead_vapour")  # off-gas via condenser
+connect_column_product("ATMOSPHERIC_DISTILLATION_COLUMN", "S17", "water_draw")       # waste water via condenser
+connect_column_product("ATMOSPHERIC_DISTILLATION_COLUMN", "S18", "distillate")       # naphtha via condenser (integrated_via beats "side")
+connect_column_product("ATMOSPHERIC_DISTILLATION_COLUMN", "S19", "side_draw")        # kero
+connect_column_product("ATMOSPHERIC_DISTILLATION_COLUMN", "S20", "side_draw")        # diesel
+connect_column_product("ATMOSPHERIC_DISTILLATION_COLUMN", "S21", "side_draw")        # AGO
+connect_column_product("ATMOSPHERIC_DISTILLATION_COLUMN", "S22", "bottoms")          # residue via reboiler
+
+8. SELF-CHECK BEFORE ANSWERING
+------------------------------
+  [ ] every stream id of streams_in and streams_out of every unit appears exactly once in that
+      unit's group; no unit or stream that is not in units_unit_view
+  [ ] roles are spelled exactly: single_in single_out multi_in mixer_out tee_in tee_out
+      vapour_out liquid_out light_liquid_out heavy_liquid_out tube_in tube_out shell_in
+      shell_out splitter_in splitter_overhead splitter_bottom fired_in fired_out flue_gas_out
+      air_in fuel_in | overhead_vapour distillate water_draw bottoms side_draw
+  [ ] columns use only connect_column_feed / connect_column_product; overhead_vapour, distillate,
+      water_draw and bottoms at most once per column (side_draw may repeat)
+  [ ] every listed stream appears in a connect / connect_column_* / skip line; no bare WARNING comments;
+      the number of such lines equals the total number of streams_in + streams_out entries
+  [ ] no connect() call targets a unit created with TYPES["column_*"]
+  [ ] the answer is the Step 6 block alone, starting with its marker line and without the
+      Step 7 marker

@@ -236,7 +236,13 @@ def apply_coupling(
         if unit_id in skipped_unit_ids:
             continue
         if unit_id in attachments:
-            unit["hysys_overrides"] = attachments[unit_id]["overrides"]
+            overrides = attachments[unit_id]["overrides"]
+            # Only annotate units that actually absorb other equipment; a bare
+            # {"skip_unit_ids": []} would just be noise for the coding agents.
+            if overrides.get("skip_unit_ids") or any(
+                key.startswith("integrated_") for key in overrides
+            ):
+                unit["hysys_overrides"] = overrides
         updated_units.append(unit)
     output["units"] = updated_units
 
@@ -247,10 +253,15 @@ def apply_coupling(
             from_unit = stream.get("from_unit")
             to_unit = stream.get("to_unit")
 
+            # Keep the absorbed unit's id so the Configuration Agent still knows
+            # that e.g. a product "from T-101" really left the reflux drum
+            # (distillate) or the reboiler (bottoms).
             if from_unit in skipped_unit_ids:
                 stream["from_unit"] = owner_by_skipped_unit.get(from_unit, from_unit)
+                stream["integrated_via"] = from_unit
             if to_unit in skipped_unit_ids:
                 stream["to_unit"] = owner_by_skipped_unit.get(to_unit, to_unit)
+                stream["integrated_via"] = to_unit
 
         output[stream_group] = [
             stream

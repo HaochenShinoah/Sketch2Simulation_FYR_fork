@@ -1,12 +1,23 @@
 from typing import Any
 
 _SINGLE_IN_OUT_HINTS: set[str] = {"valve", "pump", "compressor", "preheater"}
+# Units that merge or split streams by design are never given an upstream
+# mixer, even when their id happens to contain a hint word (for example the
+# mixer "MIXER_TO_FEED_VALVE" inserted by this very function).
+_MULTI_INLET_HINTS: set[str] = {"mixer", "tee", "splitter", "header"}
 
 
 def _is_single_in_out_unit(unit: dict[str, Any]) -> bool:
     unit_id = (unit.get("id") or "").lower()
     unit_name = (unit.get("name") or "").lower()
     tags = [str(tag).lower() for tag in (unit.get("tags") or [])]
+    # Units inserted by the normalisers, and units whose tags say they merge or
+    # split streams, never get an upstream mixer. (Only the tags are checked so
+    # that a "Splitter Feed Pump" is still treated as a single-inlet pump.)
+    if unit_id.startswith(("mixer_to_", "tee_from_")):
+        return False
+    if any(hint in " ".join(tags) for hint in _MULTI_INLET_HINTS):
+        return False
     text = " ".join([unit_id, unit_name] + tags)
     return any(hint in text for hint in _SINGLE_IN_OUT_HINTS)
 

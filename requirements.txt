@@ -1,14 +1,11 @@
+# Core
+openai>=2.0
 pydantic>=2.0
-requests>=2.31
+langgraph>=0.2
+langchain-core>=0.3
+numpy>=1.26
 pandas>=2.0
 openpyxl>=3.1
 Pillow>=10.0
-langgraph>=0.2
-langchain-core>=0.3
-langchain-ollama>=0.2
-langchain-community>=0.3
-langchain-huggingface>=0.1
-chromadb>=0.5
-sentence-transformers>=3.0
-huggingface-hub>=0.24
-pywin32>=306
+# Aspen HYSYS COM automation (Windows only; executor stage)
+pywin32>=306; sys_platform == "win32"

@@ -1,7 +1,7 @@
 from typing import Any
 
-from utils.agent_utils import invoke_graph
-from utils.logging_utils import (
+from sketch2sim.utils.agent_utils import invoke_graph
+from sketch2sim.utils.logging_utils import (
     build_runtime_issue_packet,
     get_latest_executor_log_tail,
     log_executor_result,

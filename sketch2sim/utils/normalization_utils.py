@@ -14,8 +14,9 @@ def build_unit_view_from_structure(extraction: dict[str, Any]) -> dict[str, Any]
         to_unit,
         role,
         connect_point=None,
+        integrated_via=None,
     ):
-        return {
+        stream = {
             "id": stream_id,
             "name": name or "",
             "from_unit": from_unit,
@@ -23,6 +24,9 @@ def build_unit_view_from_structure(extraction: dict[str, Any]) -> dict[str, Any]
             "role": role,
             "connect_point": connect_point,
         }
+        if integrated_via:
+            stream["integrated_via"] = integrated_via
+        return stream
 
     all_streams: list[dict[str, Any]] = []
 
@@ -35,6 +39,7 @@ def build_unit_view_from_structure(extraction: dict[str, Any]) -> dict[str, Any]
                 stream.get("to_unit"),
                 "feed",
                 stream.get("connect_point"),
+                stream.get("integrated_via"),
             )
         )
 
@@ -47,6 +52,7 @@ def build_unit_view_from_structure(extraction: dict[str, Any]) -> dict[str, Any]
                 stream.get("to_unit"),
                 "intermediate",
                 stream.get("connect_point"),
+                stream.get("integrated_via"),
             )
         )
 
@@ -59,6 +65,7 @@ def build_unit_view_from_structure(extraction: dict[str, Any]) -> dict[str, Any]
                 None,
                 "product",
                 stream.get("connect_point"),
+                stream.get("integrated_via"),
             )
         )
 
@@ -68,37 +75,38 @@ def build_unit_view_from_structure(extraction: dict[str, Any]) -> dict[str, Any]
         if not unit_id:
             continue
 
-        streams_in = [
-            {
+        def view(stream, endpoint_key):
+            entry = {
                 "id": stream["id"],
                 "name": stream.get("name", ""),
                 "role": stream.get("role", ""),
-                "from_unit": stream.get("from_unit"),
+                endpoint_key: stream.get(endpoint_key),
                 "connect_point": stream.get("connect_point"),
             }
+            if stream.get("integrated_via"):
+                entry["integrated_via"] = stream["integrated_via"]
+            return entry
+
+        streams_in = [
+            view(stream, "from_unit")
             for stream in all_streams
             if stream.get("to_unit") == unit_id
         ]
-
         streams_out = [
-            {
-                "id": stream["id"],
-                "name": stream.get("name", ""),
-                "role": stream.get("role", ""),
-                "to_unit": stream.get("to_unit"),
-                "connect_point": stream.get("connect_point"),
-            }
+            view(stream, "to_unit")
             for stream in all_streams
             if stream.get("from_unit") == unit_id
         ]
 
-        unit_view_units.append(
-            {
-                "unit_id": unit_id,
-                "unit_name": unit.get("name", ""),
-                "streams_in": streams_in,
-                "streams_out": streams_out,
-            }
-        )
+        unit_entry: dict[str, Any] = {
+            "unit_id": unit_id,
+            "unit_name": unit.get("name", ""),
+            "tags": list(unit.get("tags") or []),
+            "streams_in": streams_in,
+            "streams_out": streams_out,
+        }
+        if unit.get("hysys_overrides"):
+            unit_entry["hysys_overrides"] = unit["hysys_overrides"]
+        unit_view_units.append(unit_entry)
 
     return {"units_unit_view": unit_view_units}
