@@ -72,7 +72,7 @@ Optional variables (all have defaults, see `sketch2sim/config.py`):
 | `S2S_OPENAI_API_MODE` | `responses` (default) or `chat` for OpenAI-compatible gateways | `responses` |
 | `S2S_OPENAI_STORE` | `1` lets the Responses API keep responses server-side for 30 days | `0` |
 | `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | alternative endpoint / org / project | unset |
-| `S2S_*_MAX_OUTPUT_TOKENS` | per-agent output caps | 4k–12k |
+| `S2S_*_MAX_OUTPUT_TOKENS` | per-agent output caps (reasoning tokens count against them) | 6k–32k |
 | `S2S_EXECUTOR_TIMEOUT`, `S2S_PYTHON_EXECUTABLE` | HYSYS script timeout (s) and interpreter | `600`, current interpreter |
 | `S2S_HSC_DIR` | where the generated script saves the `.hsc` | `outputs/` |
 | `S2S_STRICT_CONNECTIONS` | `0` → missing stream connections do not fail the script | `1` |
@@ -124,7 +124,7 @@ The evidence behind every type string and port member, with sources and confiden
 python tools/hysys_discover_com_api.py
 ```
 
-It creates a scratch case, tries every candidate type string, lists the stream-port members of every object HYSYS creates, probes the connection members with real streams and writes `logs/hysys_com_discovery.{json,md}`. Use the report to trim `TYPES` / `PORTS` in the template and, if you like, to mark the corresponding lines of the instruction files as verified.
+It reads `TYPES` and `PORTS` from the template, creates a scratch case, tries every candidate type string in the template's order (with the three `Operations.Add` call shapes), lists the stream-port members of every object HYSYS creates, probes every template port member with real streams and writes `logs/hysys_com_discovery.{json,md}`; the report says per category whether the template's first choice worked. Use it to reorder or trim `TYPES` / `PORTS` in the template and, if you like, to mark the corresponding lines of the instruction files as verified.
 
 ---
 
