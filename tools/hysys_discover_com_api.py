@@ -7,10 +7,13 @@ The two instruction files used by the Instantiation and Configuration agents
 without access to a HYSYS installation. Everything marked VERIFIED in them was
 taken from working public code; everything marked CANDIDATE is a best guess
 with fallbacks. Run this script once on the HYSYS laptop to turn guesses into
-facts: it tries every candidate ``Operations.Add`` type string, lists the
-stream-port members of each object that HYSYS creates, probes the connection
-members with real streams, and writes a report you can paste back into the
-instruction files.
+facts: it reads the ``TYPES`` and ``PORTS`` candidate lists straight from the
+script template (``sketch2sim/instructions/hysys_template_base.py``), tries
+every type string with ``Operations.Add`` (in the template's order, with the
+three call shapes the template uses), lists the stream-port members of each
+object that HYSYS creates, probes every port member of the template with real
+streams, and writes a report that says, per unit category, whether the
+template's first choice works.
 
 Usage (from the repository root, in the project's virtual environment)::
 
@@ -23,63 +26,167 @@ The scratch case is never saved. Close HYSYS afterwards if it stays open.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
 import sys
 import traceback
 from datetime import datetime
+from pathlib import Path
 
-# Type strings to try with Flowsheet.Operations.Add(name, type_name).
-# (verified) = seen as TypeName of real objects in public working code.
-CANDIDATE_TYPE_NAMES: dict[str, list[str]] = {
-    "mixer": ["mixerop"],  # verified
-    "tee": ["teeop"],  # verified
-    "valve": ["valveop"],  # verified
-    "pump": ["pumpop"],  # verified
-    "compressor": ["compressor", "compressorop"],  # "compressor" verified
-    "expander": ["expandop", "expander", "expanderop"],
-    "heater": ["heaterop"],  # verified
-    "cooler": ["coolerop"],  # verified
-    "heat_exchanger": ["heatexop"],  # verified
-    "air_cooler": ["aircoolerop", "aircooler"],
+TEMPLATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "sketch2sim"
+    / "instructions"
+    / "hysys_template_base.py"
+)
+
+
+def load_template_lists(
+    path: str | Path = TEMPLATE_PATH,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Read the TYPES and PORTS dictionaries from the template without running it."""
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    found: dict[str, dict[str, list[str]]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in {"TYPES", "PORTS"}:
+                found[target.id] = ast.literal_eval(node.value)
+    return found.get("TYPES", {}), found.get("PORTS", {})
+
+
+# Type strings tried in addition to the template's TYPES: further spellings for
+# template categories, and categories the agents do not use (reported for
+# completeness). Template candidates always come first and keep their order.
+EXTRA_TYPE_NAMES: dict[str, list[str]] = {
+    "separator": ["flashop"],
+    "reactor_pfr": ["pfr"],
+    "column_reboiled_absorber": ["reboiledabsorberop"],
+    "column_refluxed_absorber": ["refluxedabsorberop"],
     "lng_exchanger": ["lngop", "lngexchangerop"],
-    "fired_heater": ["dynamicfiredheaterop", "firedheaterop", "firedheater"],
-    "separator_2phase": ["separatorop", "separator", "flashop"],
-    "separator_3phase": [
-        "3phaseseparatorop",
-        "threephaseseparatorop",
-        "3phaseseparator",
-        "separator3op",
-    ],
-    "tank": ["tankop", "tank"],
-    "conversion_reactor": ["conversionreactorop"],  # verified
-    "equilibrium_reactor": [
-        "equilibriumreactorop",
-        "eqreactorop",
-        "equilibriumreactor",
-    ],
-    "gibbs_reactor": ["gibbsreactorop", "gibbsreactor"],
-    "yield_shift_reactor": ["yieldshiftreactorop", "yieldreactorop"],
-    "cstr": ["cstrop", "cstr", "cstreactorop"],
-    "pfr": ["pfrop", "pfreactorop", "plugflowreactorop", "pfr"],
-    "distillation_column": ["distillation"],  # verified
-    "absorber": ["absorber", "absorberop"],
-    "reboiled_absorber": ["reboiledabsorber", "rebabsorber", "reboiledabsorberop"],
-    "refluxed_absorber": ["refluxedabsorber", "refabsorber", "refluxedabsorberop"],
-    "liquid_liquid_extractor": ["liquidliquidextractor", "extractor", "lleop"],
-    "shortcut_column": ["shdistop"],  # verified
-    "component_splitter": ["fractop"],  # verified
-    "recycle": ["recycle"],  # verified
-    "adjust": ["adjust"],  # verified
-    "set": ["setop"],  # verified
+    "reactor_yield_shift": ["yieldshiftreactorop", "yieldreactorop"],
+    "column_liquid_liquid_extractor": ["liquidliquidextractor", "extractor", "lleop"],
     "balance": ["balanceop", "balance"],
-    "spreadsheet": ["spreadsheetop"],  # verified
-    "stream_cutter": ["streamcutterop"],  # verified
-    "pipe_segment": ["pipeseg", "pipesegop"],
+    "stream_cutter": ["streamcutterop"],
     "relief_valve": ["reliefvalveop", "reliefvalve"],
     "ejector": ["ejectorop", "ejector"],
 }
+
+
+def build_candidate_type_names(
+    template_types: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    """Template TYPES first (same keys, same order), then the extra guesses."""
+    if template_types is None:
+        template_types, _ = load_template_lists()
+    merged: dict[str, list[str]] = {k: list(v) for k, v in template_types.items()}
+    for category, names in EXTRA_TYPE_NAMES.items():
+        bucket = merged.setdefault(category, [])
+        lower = {name.lower() for name in bucket}
+        for name in names:
+            if name.lower() not in lower:
+                bucket.append(name)
+                lower.add(name.lower())
+    return merged
+
+
+# Which connection family each category belongs to, and which template PORTS
+# roles (hence which members) are probed for that family.
+FAMILY_BY_CATEGORY: dict[str, str] = {
+    "pump": "single_port",
+    "compressor": "single_port",
+    "expander": "single_port",
+    "valve": "single_port",
+    "heater": "single_port",
+    "cooler": "single_port",
+    "air_cooler": "single_port",
+    "recycle": "single_port",
+    "pipe": "single_port",
+    "relief_valve": "single_port",
+    "mixer": "mixer",
+    "tee": "tee",
+    "separator": "vessel",
+    "separator_3phase": "vessel",
+    "tank": "vessel",
+    "reactor_conversion": "vessel",
+    "reactor_equilibrium": "vessel",
+    "reactor_gibbs": "vessel",
+    "reactor_cstr": "vessel",
+    "reactor_pfr": "vessel",
+    "reactor_yield_shift": "vessel",
+    "ejector": "vessel",
+    "heat_exchanger": "heat_exchanger",
+    "lng_exchanger": "heat_exchanger",
+    "component_splitter": "splitter",
+    "fired_heater": "fired_heater",
+    "column_distillation": "column",
+    "column_absorber": "column",
+    "column_reboiled_absorber": "column",
+    "column_refluxed_absorber": "column",
+    "column_shortcut": "column",
+    "column_liquid_liquid_extractor": "column",
+    "adjust": "logical",
+    "set": "logical",
+    "spreadsheet": "logical",
+    "balance": "logical",
+    "stream_cutter": "single_port",
+}
+ROLES_BY_FAMILY: dict[str, list[str]] = {
+    "single_port": ["single_in", "single_out"],
+    "mixer": ["multi_in", "mixer_out"],
+    "tee": ["tee_in", "tee_out"],
+    "vessel": [
+        "multi_in",
+        "vapour_out",
+        "liquid_out",
+        "light_liquid_out",
+        "heavy_liquid_out",
+    ],
+    "heat_exchanger": ["tube_in", "tube_out", "shell_in", "shell_out"],
+    "splitter": ["splitter_in", "splitter_overhead", "splitter_bottom"],
+    "fired_heater": ["fired_in", "fired_out", "flue_gas_out", "air_in", "fuel_in"],
+    "column": ["multi_in"],
+    "logical": [],
+}
+# Probes added on top of the template members (energy streams are not in PORTS).
+EXTRA_PROBES: dict[str, list[tuple[str, str]]] = {
+    "single_port": [("set_energy", "EnergyStream")],
+    "vessel": [("set_energy", "EnergyStream")],
+    "fired_heater": [("set_energy", "EnergyStream")],
+}
+COLUMN_FAMILIES = {"column"}
+
+
+def probe_from_member(member: str) -> tuple[str, str]:
+    """Template PORTS entry -> (kind, member): "Feeds.Add" is an add, bare names are sets."""
+    if member.endswith(".Add"):
+        return "add", member[:-4]
+    return "set", member
+
+
+def build_connection_probes(
+    template_ports: dict[str, list[str]] | None = None,
+) -> dict[str, list[tuple[str, str]]]:
+    """Connection members to probe with real streams, per family, from the template PORTS."""
+    if template_ports is None:
+        _, template_ports = load_template_lists()
+    probes: dict[str, list[tuple[str, str]]] = {}
+    for family, roles in ROLES_BY_FAMILY.items():
+        bucket: list[tuple[str, str]] = []
+        for role in roles:
+            for member in template_ports.get(role, []):
+                probe = probe_from_member(member)
+                if probe not in bucket:
+                    bucket.append(probe)
+        for probe in EXTRA_PROBES.get(family, []):
+            if probe not in bucket:
+                bucket.append(probe)
+        probes[family] = bucket
+    return probes
+
 
 # Member names worth reporting for every created object.
 PORT_PATTERN = re.compile(
@@ -87,64 +194,6 @@ PORT_PATTERN = re.compile(
     r"Overhead|Bottom|Distillate|Reflux|Duty|Tube|Shell|Hot|Cold)",
     re.IGNORECASE,
 )
-
-# Connection members to probe with real streams, per unit family.
-CONNECTION_PROBES: dict[str, list[tuple[str, str]]] = {
-    # (kind, member): kind is "set" (op.<member> = stream) or "add" (op.<member>.Add(stream))
-    "single_port": [
-        ("set", "FeedStream"),
-        ("set", "ProductStream"),
-        ("set_energy", "EnergyStream"),
-    ],
-    "multi_feed": [
-        ("add", "Feeds"),
-        ("add", "AttachedFeeds"),
-        ("set", "VapourProduct"),
-        ("set", "LiquidProduct"),
-        ("set", "HeavyLiquidProduct"),
-        ("set", "LightLiquidProduct"),
-        ("set", "Product"),
-        ("add", "Products"),
-        ("add", "AttachedProducts"),
-        ("set_energy", "EnergyStream"),
-    ],
-    "tee": [
-        ("set", "Feed"),
-        ("set", "FeedStream"),
-        ("add", "Products"),
-        ("add", "AttachedProducts"),
-    ],
-    "heat_exchanger": [
-        ("set", "TubeSideFeed"),
-        ("set", "TubeSideProduct"),
-        ("set", "ShellSideFeed"),
-        ("set", "ShellSideProduct"),
-    ],
-}
-FAMILY_BY_UNIT = {
-    "mixer": "multi_feed",
-    "tee": "tee",
-    "valve": "single_port",
-    "pump": "single_port",
-    "compressor": "single_port",
-    "expander": "single_port",
-    "heater": "single_port",
-    "cooler": "single_port",
-    "heat_exchanger": "heat_exchanger",
-    "air_cooler": "single_port",
-    "fired_heater": "multi_feed",
-    "separator_2phase": "multi_feed",
-    "separator_3phase": "multi_feed",
-    "tank": "multi_feed",
-    "conversion_reactor": "multi_feed",
-    "equilibrium_reactor": "multi_feed",
-    "gibbs_reactor": "multi_feed",
-    "yield_shift_reactor": "multi_feed",
-    "cstr": "multi_feed",
-    "pfr": "multi_feed",
-    "component_splitter": "multi_feed",
-    "recycle": "single_port",
-}
 
 
 def member_table(com_obj) -> dict[str, list[str]]:
@@ -170,18 +219,30 @@ def member_table(com_obj) -> dict[str, list[str]]:
 
 
 def try_add(flowsheet, name: str, type_name: str):
-    try:
-        op = flowsheet.Operations.Add(name, type_name)
-    except Exception as error:  # noqa: BLE001
-        return None, f"{type(error).__name__}: {error}"
-    if op is None:
-        return None, "Operations.Add returned None"
-    return op, None
+    """Operations.Add with the three call shapes the template tries, in order."""
+    errors = []
+    for shape, call in (
+        ("Add(name, type)", lambda: flowsheet.Operations.Add(name, type_name)),
+        ("Add(type, name)", lambda: flowsheet.Operations.Add(type_name, name)),
+        ("Add(type)", lambda: flowsheet.Operations.Add(type_name)),
+    ):
+        try:
+            op = call()
+        except Exception as error:  # noqa: BLE001
+            errors.append(f"{shape}: {type(error).__name__}: {error}")
+            continue
+        if op is None:
+            errors.append(f"{shape}: Operations.Add returned None")
+            continue
+        return op, shape, None
+    return None, None, " | ".join(errors)
 
 
-def probe_connections(op, family: str, flowsheet, counter: list[int]) -> dict[str, str]:
+def probe_connections(
+    op, probes: list[tuple[str, str]], flowsheet, counter: list[int]
+) -> dict[str, str]:
     results: dict[str, str] = {}
-    for kind, member in CONNECTION_PROBES.get(family, []):
+    for kind, member in probes:
         counter[0] += 1
         stream_name = f"TMP_S{counter[0]}"
         try:
@@ -268,8 +329,21 @@ def main() -> int:
         pass
     case = hysys.SimulationCases.Add("s2s_com_discovery")
     hybasis = case.BasisManager
+    try:
+        hybasis.StartBasisChange()
+    except Exception as error:  # noqa: BLE001
+        report["start_basis_change_error"] = str(error)
     fluidpkg = hybasis.FluidPackages.Add()
-    fluidpkg.PropertyPackageName = "Peng-Robinson"
+    for package in ("PengRob", "Peng-Robinson", "PengRobinson"):
+        try:
+            fluidpkg.PropertyPackageName = package
+            report["property_package"] = {
+                "set": package,
+                "readback": str(fluidpkg.PropertyPackageName),
+            }
+            break
+        except Exception as error:  # noqa: BLE001
+            report.setdefault("property_package_errors", {})[package] = str(error)
     for comp in ("Methane", "Ethane", "H2O"):
         try:
             fluidpkg.Components.Add(comp)
@@ -279,19 +353,28 @@ def main() -> int:
     flowsheet = case.Flowsheet
     report["flowsheet_members"] = member_table(flowsheet)
 
+    template_types, template_ports = load_template_lists()
+    candidates_by_unit = build_candidate_type_names(template_types)
+    probes_by_family = build_connection_probes(template_ports)
+    report["template"] = str(TEMPLATE_PATH)
+
     type_results: dict[str, dict] = {}
     counter = [0]
     index = 0
-    for unit, candidates in CANDIDATE_TYPE_NAMES.items():
-        entry: dict = {"tried": {}}
+    for unit, candidates in candidates_by_unit.items():
+        entry: dict = {"tried": {}, "template_candidates": template_types.get(unit, [])}
+        family = FAMILY_BY_CATEGORY.get(unit, "")
         for type_name in candidates:
             index += 1
-            op, error = try_add(flowsheet, f"TMP_U{index}", type_name)
+            op, shape, error = try_add(flowsheet, f"TMP_U{index}", type_name)
             if op is None:
                 entry["tried"][type_name] = error
                 continue
-            entry["tried"][type_name] = "OK"
+            entry["tried"][type_name] = f"OK via {shape}"
             entry["working_type_name"] = type_name
+            entry["call_shape"] = shape
+            if unit in template_types:
+                entry["template_first_choice_ok"] = type_name == template_types[unit][0]
             for attr in ("TypeName", "VisibleTypeName"):
                 try:
                     entry[attr] = getattr(op, attr)
@@ -308,19 +391,23 @@ def main() -> int:
                     f"  warning: type info of {unit} unavailable: {table['__error__']}"
                 )
             entry["connection_probe"] = probe_connections(
-                op, FAMILY_BY_UNIT.get(unit, ""), flowsheet, counter
+                op, probes_by_family.get(family, []), flowsheet, counter
             )
-            if unit in {
-                "distillation_column",
-                "absorber",
-                "reboiled_absorber",
-                "refluxed_absorber",
-                "liquid_liquid_extractor",
-            }:
+            if family in COLUMN_FAMILIES:
                 entry["column"] = probe_column(op)
             break
         type_results[unit] = entry
-        print(f"{unit:26s} -> {entry.get('working_type_name', 'NOT CREATED')}")
+        first = entry.get("template_first_choice_ok")
+        note = (
+            ""
+            if first is None
+            else (
+                " (template first choice)"
+                if first
+                else " (template first choice FAILED)"
+            )
+        )
+        print(f"{unit:30s} -> {entry.get('working_type_name', 'NOT CREATED')}{note}")
 
     report["units"] = type_results
     json_path = os.path.join(args.out_dir, "hysys_com_discovery.json")
@@ -329,15 +416,31 @@ def main() -> int:
 
     lines = ["# HYSYS COM discovery report", "", f"Generated: {report['started']}", ""]
     lines.append(
-        "| unit | working type string | TypeName | VisibleTypeName | connection members that worked |"
+        "| category (TYPES key) | working type string | template first choice | call shape | "
+        "TypeName | VisibleTypeName | connection members that worked |"
     )
-    lines.append("|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|")
     for unit, entry in type_results.items():
         ok = [k for k, v in entry.get("connection_probe", {}).items() if v == "OK"]
+        first = entry.get("template_first_choice_ok")
+        first_text = "n/a" if first is None else ("OK" if first else "FAILED")
         lines.append(
-            f"| {unit} | {entry.get('working_type_name', '-')} | {entry.get('TypeName', '-')} | "
+            f"| {unit} | {entry.get('working_type_name', '-')} | {first_text} | "
+            f"{entry.get('call_shape', '-')} | {entry.get('TypeName', '-')} | "
             f"{entry.get('VisibleTypeName', '-')} | {', '.join(ok) or '-'} |"
         )
+    failed = [
+        f"{unit}: {', '.join(entry.get('template_candidates', []))}"
+        for unit, entry in type_results.items()
+        if entry.get("template_candidates") and "working_type_name" not in entry
+    ]
+    if failed:
+        lines += [
+            "",
+            "Template categories with NO working type string (edit TYPES):",
+            "",
+        ]
+        lines += [f"- {item}" for item in failed]
     lines += ["", "Port-like members per created object:", ""]
     for unit, entry in type_results.items():
         if "port_members" in entry:

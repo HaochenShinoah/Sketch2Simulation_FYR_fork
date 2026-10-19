@@ -66,7 +66,12 @@ def load_dotenv(path: str | Path = ".env", override: bool = False) -> dict[str, 
     env_path = Path(path)
     if not env_path.is_file():
         return loaded
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+    raw = env_path.read_bytes()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = raw.decode("utf-16")  # PowerShell 5.1 `echo > .env` writes UTF-16
+    else:
+        text = raw.decode("utf-8-sig", errors="replace")  # BOM from Notepad is fine
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -75,8 +80,11 @@ def load_dotenv(path: str | Path = ".env", override: bool = False) -> dict[str, 
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip()
-        if value[:1] in {'"', "'"} and value[-1:] == value[:1] and len(value) >= 2:
-            value = value[1:-1]
+        if value[:1] in {'"', "'"}:
+            # Quoted value: everything up to the closing quote; a trailing
+            # comment after the closing quote is ignored.
+            closing = value.find(value[0], 1)
+            value = value[1:closing] if closing != -1 else value[1:]
         else:
             value = value.split(" #", 1)[0].split("\t#", 1)[0].strip()  # inline comment
         if not key:
