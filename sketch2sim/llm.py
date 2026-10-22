@@ -372,6 +372,7 @@ def _build_responses_kwargs(
         }
     elif json_mode:
         kwargs["text"] = {"format": {"type": "json_object"}}
+        ensure_json_word(kwargs)
     return kwargs
 
 
@@ -428,7 +429,67 @@ def _build_chat_kwargs(
         }
     elif json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+        ensure_json_word(kwargs)
     return kwargs
+
+
+# ---------------------------------------------------------------------------
+# JSON mode: the API requires the word "json" in the prompt
+# ---------------------------------------------------------------------------
+# OpenAI rejects a json_object request unless the word "json" occurs in the
+# messages. In the Responses API only the *input* messages are checked, not
+# `instructions`, so a system prompt full of "JSON" does not count. The hint is
+# appended to the user text only when the word is missing there.
+_JSON_WORD_RE = re.compile(r"json", re.IGNORECASE)
+JSON_MODE_HINT = "Respond with a single JSON object."
+
+
+def _part_texts(content: Any) -> list[str]:
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and "text" in part
+        ]
+    return []
+
+
+def _append_hint(message: dict[str, Any], text_type: str) -> None:
+    content = message.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == text_type:
+                part["text"] = (
+                    f"{str(part.get('text', '')).rstrip()}\n\n{JSON_MODE_HINT}"
+                )
+                return
+        content.insert(0, {"type": text_type, "text": JSON_MODE_HINT})
+        return
+    message["content"] = f"{str(content or '').rstrip()}\n\n{JSON_MODE_HINT}".strip()
+
+
+def ensure_json_word(kwargs: dict[str, Any]) -> bool:
+    """Make a json_object request acceptable; returns True if the hint was added."""
+    if "input" in kwargs:  # Responses API: only the input messages are checked
+        messages, text_type = kwargs["input"], "input_text"
+    elif "messages" in kwargs:  # Chat Completions: every message counts
+        messages, text_type = kwargs["messages"], "text"
+    else:
+        return False
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if isinstance(message, dict) and any(
+            _JSON_WORD_RE.search(text) for text in _part_texts(message.get("content"))
+        ):
+            return False
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            _append_hint(message, text_type)
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +531,7 @@ def _downgrade_output_format(kwargs: dict[str, Any], param: str) -> bool:
         fmt = (kwargs.get("text") or {}).get("format") or {}
         if fmt.get("type") == "json_schema":
             kwargs["text"] = {"format": {"type": "json_object"}}
+            ensure_json_word(kwargs)
             return True
         kwargs.pop("text", None)
         return False
@@ -477,6 +539,7 @@ def _downgrade_output_format(kwargs: dict[str, Any], param: str) -> bool:
         fmt = kwargs.get("response_format") or {}
         if fmt.get("type") == "json_schema":
             kwargs["response_format"] = {"type": "json_object"}
+            ensure_json_word(kwargs)
             return True
         kwargs.pop("response_format", None)
         return False
