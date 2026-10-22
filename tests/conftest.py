@@ -17,6 +17,10 @@ import numpy as np
 import pytest
 
 from sketch2sim import llm
+from sketch2sim.utils.normalization_utils import (
+    is_burner_side_stream,
+    is_flue_gas_stream,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -87,10 +91,14 @@ _CATEGORY_BY_TAG = [
 ]
 
 
-def _category(unit: dict) -> str:
+def _category(unit: dict, inlets: int = 1, outlets: int = 1) -> str:
     text = " ".join(
         [unit.get("id", ""), unit.get("name", "")] + list(unit.get("tags", []))
     ).lower()
+    # As the instructions say: a unit exchanging two process streams (2 in AND
+    # 2 out) is a heat exchanger; the stream count decides, not the tag.
+    if "exchanger" in text and inlets >= 2 and outlets >= 2:
+        return "heat_exchanger"
     for key, category in _CATEGORY_BY_TAG:
         if key in text:
             return category
@@ -101,11 +109,20 @@ def fake_instantiation_output(user_prompt: str) -> str:
     structure = _json_between(
         user_prompt, "STRUCTURED_JSON:\n----------------\n", "\n\nCURRENT PYTHON SCRIPT"
     )
+    inlets: dict[str, int] = {}
+    outlets: dict[str, int] = {}
+    for group in ("feed_streams", "intermediate_streams", "product_streams"):
+        for stream in structure.get(group, []):
+            if stream.get("to_unit"):
+                inlets[stream["to_unit"]] = inlets.get(stream["to_unit"], 0) + 1
+            if stream.get("from_unit"):
+                outlets[stream["from_unit"]] = outlets.get(stream["from_unit"], 0) + 1
     lines = ["# === Step 4: Add Unit Operations (Agent 2) ===", "units = {}"]
     for unit in structure["units"]:
-        lines.append(
-            f'add_unit("{unit["id"]}", "{unit["name"]}", TYPES["{_category(unit)}"])'
+        category = _category(
+            unit, inlets.get(unit["id"], 0), outlets.get(unit["id"], 0)
         )
+        lines.append(f'add_unit("{unit["id"]}", "{unit["name"]}", TYPES["{category}"])')
     lines += ["", "# === Step 5: Add Material Streams (Agent 2) ===", "streams = {}"]
     for group in ("feed_streams", "intermediate_streams", "product_streams"):
         for stream in structure.get(group, []):
@@ -116,11 +133,45 @@ def fake_instantiation_output(user_prompt: str) -> str:
 
 _GAS_WORDS = ("gas", "vapour", "vapor", "vent", "off-gas", "purge", "overhead")
 _WATER_WORDS = ("water", "aqueous", "brine")
+_GENERIC_WORDS = {"the", "and", "stream", "outlet", "inlet", "feed", "product"}
+
+
+def _exchanger_pairs(unit: dict) -> list[tuple[dict, dict]]:
+    """(inlet, outlet) pairs of a two-stream exchanger: name overlap first."""
+
+    def words(stream: dict) -> set[str]:
+        return {
+            w
+            for w in re.findall(r"[a-z0-9]+", (stream.get("name") or "").lower())
+            if len(w) >= 3 and w not in _GENERIC_WORDS
+        }
+
+    inlets = list(unit["streams_in"])
+    outlets = list(unit["streams_out"])
+    pairs: list[tuple[dict, dict]] = []
+    for outlet in list(outlets):
+        best = max(inlets, key=lambda inlet: len(words(inlet) & words(outlet)))
+        if words(best) & words(outlet):
+            pairs.append((best, outlet))
+            inlets.remove(best)
+            outlets.remove(outlet)
+    pairs.extend(zip(inlets, outlets, strict=False))
+    assert len(pairs) == 2 and len(inlets) == len(outlets), (
+        f"exchanger {unit['unit_id']} is not 2 in / 2 out: "
+        f"{[s['id'] for s in unit['streams_in']]} -> "
+        f"{[s['id'] for s in unit['streams_out']]}"
+    )
+    return pairs
 
 
 def _is_column(unit: dict) -> bool:
     text = " ".join([unit.get("unit_name", "")] + list(unit.get("tags", []))).lower()
-    return "column" in text or "tower" in text or "hysys_overrides" in unit
+    # "Tower Feed Heater" is a heater: only the word column (or distillation) or
+    # absorbed equipment makes a unit a column here, as TYPES does for the real agent.
+    return (
+        "hysys_overrides" in unit
+        or re.search(r"\bcolumn\b|distillation|absorber", text) is not None
+    )
 
 
 def fake_configuration_output(user_prompt: str) -> str:
@@ -132,41 +183,96 @@ def fake_configuration_output(user_prompt: str) -> str:
         key = unit["unit_id"]
         lines.append(f"# --- {key} ({unit['unit_name']}) ---")
         text = " ".join(
-            [unit.get("unit_name", "")] + list(unit.get("tags", []))
+            [key, unit.get("unit_name", "")] + list(unit.get("tags", []))
         ).lower()
         if _is_column(unit):
             for stream in unit["streams_in"]:
                 lines.append(f'connect_column_feed("{key}", "{stream["id"]}")')
+            overrides = unit.get("hysys_overrides") or {}
+            reboiler_id = str(
+                (overrides.get("integrated_reboiler") or {}).get("unit_id") or ""
+            ).lower()
             for stream in unit["streams_out"]:
                 name = stream.get("name", "").lower()
                 point = stream.get("connect_point")
-                if point == "side" and not stream.get("integrated_via"):
-                    role = "side_draw"
-                elif any(w in name for w in _GAS_WORDS):
-                    role = "overhead_vapour"
-                elif point == "bottom" and any(w in name for w in _WATER_WORDS):
-                    role = "water_draw"
-                elif point == "bottom":
+                via = (stream.get("integrated_via") or "").lower()
+                water = any(w in name for w in _WATER_WORDS)
+                gas = any(w in name for w in _GAS_WORDS)
+                if via and via == reboiler_id:
                     role = "bottoms"
+                elif via:  # left the folded condenser / reflux drum / reflux pump
+                    role = (
+                        "water_draw"
+                        if water
+                        else "overhead_vapour"
+                        if gas or point == "overhead"
+                        else "distillate"
+                    )
+                elif point == "side":
+                    role = "side_draw"
+                elif point == "bottom":
+                    role = "water_draw" if water else "bottoms"
+                elif point == "overhead" or gas:
+                    role = "overhead_vapour"
                 else:
                     role = "distillate"
                 lines.append(
                     f'connect_column_product("{key}", "{stream["id"]}", "{role}")'
                 )
             continue
-        single = any(
-            w in text
-            for w in ("pump", "valve", "compressor", "heater", "cooler", "exchanger")
+        mixer = "mixer" in text or key.startswith("MIXER_TO_")
+        tee = not mixer and ("tee" in text or key.startswith("TEE_FROM_"))
+        fired = not mixer and ("fired" in text or "furnace" in text)
+        if (
+            not (mixer or tee or fired)
+            and "exchanger" in text
+            and len(unit["streams_in"]) >= 2
+            and len(unit["streams_out"]) >= 2
+        ):
+            # Two-stream exchanger: pair each outlet with the inlet whose name
+            # it continues, the rest by position (as the instructions say).
+            for side, (inlet, outlet) in zip(
+                ("tube", "shell"), _exchanger_pairs(unit), strict=False
+            ):
+                lines.append(f'connect("{key}", "{inlet["id"]}", "{side}_in")')
+                lines.append(f'connect("{key}", "{outlet["id"]}", "{side}_out")')
+            continue
+        single = (
+            not mixer
+            and not tee
+            and not fired
+            and any(
+                w in text
+                for w in (
+                    "pump",
+                    "valve",
+                    "compressor",
+                    "heater",
+                    "cooler",
+                    "exchanger",
+                )
+            )
         )
-        mixer = "mixer" in text
         for stream in unit["streams_in"]:
-            role = "single_in" if single else "multi_in"
+            if mixer:
+                role = "multi_in"
+            elif tee:
+                role = "tee_in"
+            elif fired:
+                # the same classifier as the normaliser (word-bounded)
+                role = "fuel_in" if is_burner_side_stream(stream) else "fired_in"
+            else:
+                role = "single_in" if single else "multi_in"
             lines.append(f'connect("{key}", "{stream["id"]}", "{role}")')
         for stream in unit["streams_out"]:
-            if single:
-                role = "single_out"
-            elif mixer:
+            if mixer:
                 role = "mixer_out"
+            elif tee:
+                role = "tee_out"
+            elif fired:
+                role = "flue_gas_out" if is_flue_gas_stream(stream) else "fired_out"
+            elif single:
+                role = "single_out"
             else:
                 role = (
                     "vapour_out"
@@ -275,6 +381,14 @@ def write_dummy_instruction(path: Path, title: str) -> Path:
         f"{title}\nUse flowsheet.Operations.Add(name, type).\n", encoding="utf-8"
     )
     return path
+
+
+@pytest.fixture(autouse=True)
+def _no_real_hysys_processes(monkeypatch):
+    """The executor must never wait for or kill real HYSYS processes during tests."""
+    from sketch2sim.agents import executor_agent
+
+    monkeypatch.setattr(executor_agent, "hysys_pids", lambda: set())
 
 
 @pytest.fixture(autouse=True)

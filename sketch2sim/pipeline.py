@@ -190,12 +190,29 @@ def run_pipeline(cfg: PipelineConfig) -> PipelineResult:
     log_json(cfg.log_dir, "step2_description_validation.json", description_validation)
     print(f"Description validation status: {description_validation.get('status')}")
 
+    # The validator's lightly cleaned text replaces the description when it asked
+    # for a revision (repetitions, contradictions); the original is kept in the logs.
+    extractor_text = descriptor_description
+    cleaned = (description_validation.get("cleaned_description") or "").strip()
+    if description_validation.get("status") == "needs_revision" and cleaned:
+        # A validator that over-condenses would drop equipment: only a text of
+        # comparable length is trusted.
+        if len(cleaned) >= 0.6 * len(descriptor_description):
+            extractor_text = cleaned
+            log_text(cfg.log_dir, "step2_description_for_extractor.txt", cleaned)
+            print("Using the validator's cleaned description for the extractor.")
+        else:
+            print(
+                "Validator asked for a revision but its cleaned text is much "
+                "shorter than the description; keeping the original."
+            )
+
     # STEP 3 Extractor
     extractor_output = run_step(
         STEP["extractor"],
         build_extractor_graph(cfg.extractor_model),
         ExtractorState(
-            process_text=descriptor_description,
+            process_text=extractor_text,
             image_path=cfg.image_path if cfg.extractor_uses_image else None,
         ),
     )
@@ -216,7 +233,14 @@ def run_pipeline(cfg: PipelineConfig) -> PipelineResult:
     # reboiler folded into their column). Runs on the raw topology: a tee
     # inserted after the reflux pump would hide the pump -> column edge.
     coupled_structure = couple_extraction(normalized_structure)
+    # Streams dropped with the folded units (utilities, the internal reflux
+    # line) are logged on their own; the agents never see them.
+    removed_streams = (
+        coupled_structure.pop("removed_streams", []) if coupled_structure else []
+    )
     log_json(cfg.log_dir, "step4B_coupled_structure.json", coupled_structure or {})
+    if removed_streams:
+        log_json(cfg.log_dir, "step4B_removed_streams.json", removed_streams)
 
     # STEP 4C Splitting points normalization (explicit tees after single-outlet
     # units and vessel ports that feed several streams)
@@ -300,6 +324,7 @@ def run_pipeline(cfg: PipelineConfig) -> PipelineResult:
             combined_path=combined_path,
             executor_graph=build_executor_graph(),
             unit_view_json_str=json.dumps(unit_view, indent=2),
+            structure_json_str=json.dumps(coupled_structure or {}, indent=2),
             instantiation_instruction_paths=list(cfg.instantiation_instruction_files),
             configuration_instruction_paths=list(cfg.configuration_instruction_files),
             fixer_model_name=cfg.fixer_model,

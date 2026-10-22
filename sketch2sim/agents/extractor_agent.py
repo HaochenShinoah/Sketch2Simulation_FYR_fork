@@ -21,6 +21,8 @@ class ExtractorState(BaseModel):
 
 
 _CONNECT_POINT = {"type": "string", "enum": ["overhead", "bottom", "side", "unknown"]}
+# Optional tray/stage hint (strict schemas require every property, hence null).
+_STAGE = {"type": ["integer", "null"]}
 
 # Strict JSON schema of the Intermediate Representation (Structured Outputs).
 EXTRACTION_JSON_SCHEMA: dict[str, Any] = {
@@ -50,8 +52,9 @@ EXTRACTION_JSON_SCHEMA: dict[str, Any] = {
                     "to_unit": {"type": "string"},
                     "name": {"type": "string"},
                     "connect_point": _CONNECT_POINT,
+                    "stage": _STAGE,
                 },
-                "required": ["id", "to_unit", "name", "connect_point"],
+                "required": ["id", "to_unit", "name", "connect_point", "stage"],
             },
         },
         "intermediate_streams": {
@@ -65,8 +68,16 @@ EXTRACTION_JSON_SCHEMA: dict[str, Any] = {
                     "to_unit": {"type": "string"},
                     "name": {"type": "string"},
                     "connect_point": _CONNECT_POINT,
+                    "stage": _STAGE,
                 },
-                "required": ["id", "from_unit", "to_unit", "name", "connect_point"],
+                "required": [
+                    "id",
+                    "from_unit",
+                    "to_unit",
+                    "name",
+                    "connect_point",
+                    "stage",
+                ],
             },
         },
         "product_streams": {
@@ -79,8 +90,9 @@ EXTRACTION_JSON_SCHEMA: dict[str, Any] = {
                     "from_unit": {"type": "string"},
                     "name": {"type": "string"},
                     "connect_point": _CONNECT_POINT,
+                    "stage": _STAGE,
                 },
-                "required": ["id", "from_unit", "name", "connect_point"],
+                "required": ["id", "from_unit", "name", "connect_point", "stage"],
             },
         },
     },
@@ -92,9 +104,9 @@ EXTRACTOR_SYSTEM_PROMPT = (
     "Return only one JSON object with these keys:\n"
     "{\n"
     '  "units": [ {"id": "Str", "name": "Str", "tags": ["Str"]} ],\n'
-    '  "feed_streams": [ {"id": "Str", "to_unit": "Str", "name": "Str", "connect_point": "Str"} ],\n'
-    '  "intermediate_streams": [ {"id": "Str", "from_unit": "Str", "to_unit": "Str", "name": "Str", "connect_point": "Str"} ],\n'
-    '  "product_streams": [ {"id": "Str", "from_unit": "Str", "name": "Str", "connect_point": "Str"} ]\n'
+    '  "feed_streams": [ {"id": "Str", "to_unit": "Str", "name": "Str", "connect_point": "Str", "stage": Int|null} ],\n'
+    '  "intermediate_streams": [ {"id": "Str", "from_unit": "Str", "to_unit": "Str", "name": "Str", "connect_point": "Str", "stage": Int|null} ],\n'
+    '  "product_streams": [ {"id": "Str", "from_unit": "Str", "name": "Str", "connect_point": "Str", "stage": Int|null} ]\n'
     "}\n\n"
     "Rules:\n"
     "- Feed streams enter the system from outside.\n"
@@ -102,7 +114,12 @@ EXTRACTOR_SYSTEM_PROMPT = (
     "- Intermediate streams connect two internal units.\n"
     '- Use exact IDs from the description. If a stream has a number, use "S" plus the number.\n'
     '- Use "overhead", "bottom", or "side" for connect_point when clear; otherwise use "unknown".\n'
-    "- Exclude utilities and energy streams.\n"
+    "- stage: the tray/stage number where a stream enters or leaves a column when the drawing states it; otherwise null.\n"
+    "- Exclude utilities and energy streams. A label starting with Q (Q-trim, Q-101, Qcond, Qreb) is a heat duty: never emit it as a stream.\n"
+    "- Flue gas leaving a fired heater and water drawn from a column condenser are material product streams, not utilities; keep them.\n"
+    "- Internal sections of a vessel (coalescer section, catalyst bed, demister, packing) are not equipment; do not emit them as units.\n"
+    "- A storage tank or feed drum at the start of the process that only shows an outlet still receives the process feed drawn into it: emit that feed stream. Never invent a feed for a reflux drum, accumulator or knock-out drum downstream of a condenser or separator.\n"
+    "- A stream that joins a line before a unit enters that unit.\n"
     "- Return JSON only. No explanations.\n"
 )
 

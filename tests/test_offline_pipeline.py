@@ -115,7 +115,7 @@ def test_pipeline_offline_cs1(fake_llm, repo_cwd, tmp_path):
     # the template's helper layer survived the basis splice
     assert final.count("# === Step 3b: HYSYS COM helpers") == 1
     assert "def add_unit(" in final and "def connect_column_feed(" in final
-    assert "finish_connections()" in final
+    assert "finish_connections(" in final and "save_case(" in final
     assert not result.executed
 
 

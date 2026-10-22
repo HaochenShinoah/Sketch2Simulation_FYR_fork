@@ -1,8 +1,10 @@
-INSTANTIATION INSTRUCTIONS - Aspen HYSYS COM, Steps 4-5 (simple_v5)
-======================================================================
+INSTANTIATION INSTRUCTIONS - Aspen HYSYS COM, Steps 4-5 (simple_v5, revised 2026-10-22)
+=======================================================================================
 Recreated for the Sketch2Simulation fork (the original file is proprietary and
-was not released). Audience: the Instantiation Agent (a code model) and the
-Fixer. Read every section before writing code.
+was not released). Every HYSYS type string and COM fact below was verified live
+on Aspen HYSYS V11 on 2026-10-22 (docs/HYSYS_COM_FACTS.md). Audience: the
+Instantiation Agent (a code model) and the Fixer. Read every section before
+writing code.
 
 0. WHAT YOU ARE DOING
 ---------------------
@@ -14,8 +16,10 @@ of a Python script that builds the flowsheet in Aspen HYSYS through COM
 (pywin32). The script runs top to bottom. Everything you need already exists
 above Step 4 and MUST be used as is:
     flowsheet                          HYSYS main flowsheet (case.Flowsheet)
-    TYPES                              dict: equipment category -> HYSYS type strings
-    add_unit(key, name, TYPES[cat])    creates units[key] with the first type string HYSYS accepts
+    TYPES                              dict: equipment category -> HYSYS type string
+    add_unit(key, name, TYPES[cat])    creates units[key]; for a column it also loads
+                                       the column template (tray section, condenser,
+                                       reboiler) so Step 6 can attach streams to it
     add_stream(key, name)              creates streams[key] (a material stream)
 Do not redefine them. Do not call HYSYS COM methods yourself in Steps 4-5.
 
@@ -71,20 +75,28 @@ Do not redefine them. Do not call HYSYS COM methods yourself in Steps 4-5.
     cooler, chiller, aftercooler, trim/product/effluent cooler,
       condenser drawn as standalone equipment (1 in / 1 out)                -> "cooler"
     heat exchanger exchanging TWO process streams
-      (2 inlets AND 2 outlets in STRUCTURED_JSON)                            -> "heat_exchanger"
+      (2 inlets AND 2 outlets in STRUCTURED_JSON; the normaliser tags a heater
+      or cooler drawn that way "heat exchanger", e.g. a feed preheater that the
+      reactor effluent passes through)                                      -> "heat_exchanger"
       A unit tagged "heat exchanger" with ONE inlet and ONE outlet is a heater
       (or a cooler when its name/tags say cooler, condenser, chiller, CW):
       the stream count decides, not the tag.
     air cooler, fin-fan cooler                                              -> "air_cooler"
-    fired heater, furnace, crude heater (H-xxx), heater with flue gas       -> "fired_heater"
+    fired heater, furnace, crude heater (H-xxx), heater with flue gas,
+      any heater tagged "fired heater" (the normaliser tags a heater that
+      receives fuel and sends out flue gas / combustion products)              -> "fired_heater"
+      (a real HYSYS fired heater: process tube passes, burner feed and flue gas;
+      this is what the paper's Figures 9 and 10 show)
+    three-phase separator, decanter, any vessel tagged 3-phase / three-phase,
+      any vessel with THREE product streams (a vapour and two liquids)       -> "separator_3phase"
     separator, flash drum, knock-out drum, phase separator, settler,
       desalter, electrostatic separator, coalescer, accumulator, wash
       vessel, caustic prewash, water wash, salt bed, clay bed, filter
       vessel, any vertical/horizontal vessel with one or two outlets        -> "separator"
-    three-phase separator, decanter, any vessel tagged 3-phase / three-phase,
-      or with TWO liquid product streams (bottom/side) besides the vapour   -> "separator_3phase"
-      (two overhead outlets + one bottom is still "separator"; Step 6 reports
-      the outlet that finds no free port)
+      (a desalter or settler with two liquid outlets and no vapour is a 2-phase
+      vessel, as in the paper's flowsheets: Step 6 sends the lighter liquid through
+      the top port; two overhead outlets + one bottom is still "separator" and
+      Step 6 reports the outlet that finds no free port)
     tank, storage tank, storage drum, surge drum, day tank                  -> "tank"
     reactor of any kind unless stated otherwise (fixed bed, packed bed,
       catalytic, Merox, hydrotreater, hydrodealkylation, conversion)        -> "reactor_conversion"
@@ -93,8 +105,8 @@ Do not redefine them. Do not call HYSYS COM methods yourself in Steps 4-5.
     CSTR, stirred-tank reactor                                               -> "reactor_cstr"
     PFR, plug-flow / tubular reactor                                         -> "reactor_pfr"
     distillation column, fractionator, tower, crude column, stabiliser,
-      splitter column, stripper, absorber, scrubber, contactor             -> see 2.4 (column_*)
-    shortcut column                                                          -> "column_shortcut"
+      splitter column, stripper, absorber, scrubber, contactor, extractor,
+      shortcut column                                                        -> see 2.4 (column_*)
     component splitter, membrane, PSA, adsorber, molecular sieve,
       black-box separation                                                   -> "component_splitter"
     pipe, pipeline segment                                                   -> "pipe"
@@ -110,22 +122,32 @@ Do not redefine them. Do not call HYSYS COM methods yourself in Steps 4-5.
 
 2.4 Columns (one unit = one add_unit line). Read the unit's hysys_overrides first, then
     its name/tags:
+      name/tags say three-phase column, 3-phase distillation, aqueous and organic
+        distillate                                                              -> "column_3phase"
+      name/tags say liquid-liquid extractor, extraction column                  -> "column_extractor"
       integrated_condenser or integrated_overhead_system  AND  integrated_reboiler  -> "column_distillation"
       only integrated_reboiler                                                    -> "column_reboiled_absorber"
       only integrated_condenser or integrated_overhead_system                     -> "column_refluxed_absorber"
       no hysys_overrides and the name/tags say absorber, scrubber, contactor,
-        stripper, wash column, extractor                                          -> "column_absorber"
+        stripper, wash column                                                     -> "column_absorber"
       no hysys_overrides otherwise (distillation column, fractionator, tower,
-        stabiliser, splitter column, crude column, debutaniser, any column whose
-        condenser/reboiler were simply not drawn)                                 -> "column_distillation"
-    The HYSYS column template already contains the tray section, condenser and reboiler,
-    which is why those pieces were folded into the column by the normaliser.
+        stabiliser, splitter column, crude column, debutaniser, shortcut column,
+        any column whose condenser/reboiler were simply not drawn)               -> "column_distillation"
+    add_unit loads the matching HYSYS column template (distillation: tray section +
+    condenser + reboiler; absorber: tray section; reboiled/refluxed absorber: tray
+    section + reboiler / condenser; three-phase: 3-phase condenser), which is why the
+    condenser, reflux drum, reflux pump and reboiler were folded into the column by the
+    normaliser. There is no shortcut-column category (the HYSYS shortcut column has no
+    template and cannot take stream connections): map shortcut columns to
+    "column_distillation".
 2.5 Example lines
         add_unit("CRUDE_OIL_PUMP", "Crude Oil Pump", TYPES["pump"])
         add_unit("MIXER_TO_MIXING_VALVE", "Mixer to MIXING_VALVE", TYPES["mixer"])
         add_unit("E-101", "Feed Preheater", TYPES["heater"])            # 1 process stream in, 1 out
         add_unit("H-101", "Feed Heater", TYPES["fired_heater"])         # furnace
         add_unit("V-102", "High-Pres. Phase Sep.", TYPES["separator"])
+        add_unit("V-104", "Caustic Settler", TYPES["separator"])        # two liquid outlets, no vapour: 2-phase vessel
+        add_unit("V-105", "Three-Phase Separator", TYPES["separator_3phase"])  # vapour + two liquids
         add_unit("T-101", "Benzene Column", TYPES["column_distillation"])
 
 3. MATERIAL STREAMS (Step 5)
@@ -139,38 +161,51 @@ Do not redefine them. Do not call HYSYS COM methods yourself in Steps 4-5.
 3.2 Create every stream of feed_streams, intermediate_streams and product_streams exactly
     once. Streams rewritten by the normaliser (ids like S_MIXER_TO_* or S_TEE_FROM_*, or
     streams whose from_unit/to_unit became a column) are ordinary streams: create them.
+    Column feeds and side draws are created here like every other stream; Step 6 replaces
+    the placeholder by the stream the column exports, keeping the name.
 3.3 Do not create energy streams, utility streams, recycle blocks or any stream that is
     not in STRUCTURED_JSON. Do not set any property on a stream.
 
 4. HYSYS COM FACTS BEHIND THE HELPERS (reference only; never copy into your output)
 ------------------------------------------------------------------------------------
+    All verified live on Aspen HYSYS V11 (2026-10-22); docs/HYSYS_COM_FACTS.md has the
+    evidence per fact.
 4.1 flowsheet.Operations.Add(name, type_string) creates a unit operation and
     flowsheet.MaterialStreams.Add(name) a material stream; both return the COM object
     (None means HYSYS refused). add_unit / add_stream wrap exactly these calls.
-4.2 Verified HYSYS type strings (TypeName of real objects, incl. live checks on V14):
-    pumpop, valveop, mixerop, teeop, heaterop, coolerop, heatexop, compressor,
-    flashtank (2-phase separator; "separatorop" does not exist on V14),
-    dynamicfiredheaterop (fired heater), conversionreactorop, distillation (column
-    template with condenser and reboiler), absorber, shdistop / fractop (shortcut column
-    and component splitter: the two sources disagree, both are tried), recycle, adjust,
-    setop, spreadsheetop, streamcutterop. Matching is case-insensitive ("MixerOp" works).
-4.3 Candidate strings tried in order by add_unit for the other categories: separator3op,
-    tankop, expandop, aircoolerop, equilibriumreactorop, gibbsreactorop, cstrop, pfrop,
-    reboiledabsorber, refluxedabsorber, pipeseg (each with fallbacks). add_unit also tries
-    the argument orders Add(name, type) / Add(type, name) / Add(type) + rename. If nothing
-    is accepted, add_unit raises with every error text; the Fixer then edits TYPES or picks
-    another category. A unit is never dropped.
-4.4 A column created from the template exposes col.ColumnFlowsheet with the sub-operations
-    "Main Tower" (older HYSYS: "Main TS"), "Condenser" and "Reboiler".
-4.5 Object names are unique per flowsheet; spaces, hyphens, underscores, digits and
+4.2 Type strings (TypeName of the created objects), one per category, no fallbacks:
+    pumpop, compressor, expandop, valveop, mixerop, teeop, heaterop, coolerop, heatexop,
+    aircoolerop, dynamicfiredheaterop (fired heater), flashtank (2-phase separator),
+    sep3op (3-phase separator), tankop, conversionreactorop, equilibriumreactorop,
+    gibbsreactorop, kineticreactorop (CSTR), pfreactorop (PFR), distillation, absorber,
+    reboiledabsorber, refluxedabsorber, threephase (three-phase distillation),
+    liqliqextractor, fractop (component splitter), recycle, adjust, setop,
+    spreadsheetop, pipeseg. Matching is case-insensitive. (shdistop, the shortcut
+    column, exists but has no template and takes no stream connections.)
+    Spellings that do NOT exist on V11: separatorop, separator3op, cstrop, pfrop,
+    componentsplitterop, ejectorop, firedheaterop, ColumnOp (creates an empty shell).
+    A wrong type string raises; add_unit then raises with every error text and the
+    unit is never silently replaced by another type.
+4.3 A column created by Operations.Add is an empty shell: its ColumnFlowsheet raises until
+    add_unit calls col.LoadColumnTemplate() (the verified form per type: no argument for
+    distillation, reboiled/refluxed absorber and the extractor; "absorber" and "3phase"
+    for the absorber and the three-phase column; the other form is tried as a fallback).
+    After that col.ColumnFlowsheet.Operations contains "Main Tower" (TypeName traysection,
+    10 stages by default; "Three Phase Column" on the three-phase template) and, per
+    template, "Condenser" / "Reboiler". CreateColumnTemplate() must never be called: it
+    installs an empty sub-flowsheet and blocks the template.
+4.4 Object names are unique per flowsheet; spaces, hyphens, underscores, digits and
     parentheses are safe. Energy streams are not needed to build and save a case.
-4.6 Basis facts (for the Fixer): the property package is set in Step 2 through the
-    variable property_package; the COM spelling of Peng-Robinson is "PengRob" (verified
-    on V14/V15); ensure_property_package() re-applies known alternative spellings when
-    the read-back differs. StartBasisChange()/EndBasisChange() bracket the basis edits.
-    Component names must be HYSYS library names ("H2O" is also accepted as "Water").
-    The solver is held (case.Solver.CanSolve = False) while the flowsheet is built and
-    released right before SaveAs.
+4.5 Basis facts (for the Fixer): the property package is set in Step 2 through the
+    variable property_package; the COM spelling of Peng-Robinson is "PengRob" (HYSYS
+    reads it back as "Peng-Robinson"). StartBasisChange()/EndBasisChange() bracket the
+    basis edits. Component names must be HYSYS library names ("H2O" is also accepted as
+    "Water"). The solver is held (case.Solver.CanSolve = False) while the flowsheet is
+    built and released right before SaveAs.
+4.6 The file head and Step 1 (DispatchEx, startup retry of SimulationCases.Add, PID log),
+    Step 3b (helpers) and Step 7 (summary, SaveAs, exit code, Quit) are owned by the
+    template; the pipeline restores them before every execution, so editing them has no
+    effect. The Fixer may change Steps 2-3 and 4-6 only.
 
 5. WORKED EXAMPLE - case study 1, crude oil desalting (paper, Figure 7)
 ----------------------------------------------------------------------
@@ -225,12 +260,24 @@ add_stream("S8", "Effluent Water")
   (e.g. S14 "Product Flow", S19 "Fuel Gas", S11 "Recycle Toluene"): create them with
   add_stream like any other stream. Do not create E-104, V-104, P-102 or E-106: they are
   no longer in STRUCTURED_JSON.units.
-  The normaliser folds the whole overhead system only when the chain condenser -> reflux
-  drum -> reflux pump -> column is drawn and named as such. When it recognised only the
-  condenser, hysys_overrides reads integrated_condenser {unit_id: E-104} and the drum and
-  pump are still listed in STRUCTURED_JSON.units: then create them like any other unit
-  (V-104 "Reflux Drum" -> TYPES["separator"], P-102 "Reflux Pumps" -> TYPES["pump"]).
-  Rule 2.2 always wins: the unit list in STRUCTURED_JSON decides what exists.
+  The normaliser folds the whole overhead system when it recognises the condenser and a
+  reflux drum / reflux pump that carry only reflux, vent and distillate streams. When it
+  recognised only the condenser, hysys_overrides reads integrated_condenser {unit_id: E-104}
+  and the drum and pump are still listed in STRUCTURED_JSON.units: then create them like
+  any other unit (V-104 "Reflux Drum" -> TYPES["separator"], P-102 "Reflux Pumps" ->
+  TYPES["pump"]). Rule 2.2 always wins: the unit list in STRUCTURED_JSON decides what exists.
+  The fired heater of the same sketch is a real furnace:
+        add_unit("H-101", "Feed Heater", TYPES["fired_heater"])
+
+6b. CRUDE COLUMN EXAMPLE - case study 3 (paper, Figure 9)
+---------------------------------------------------------
+  units (abridged): CRUDE_OIL_STORAGE_TANK [tank] -> "tank"; FEED_PUMP -> "pump";
+  PRE_HEAT_TRAIN_1 / PRE_HEAT_TRAIN_2 [heat exchanger, 1 in / 1 out] -> "heater";
+  MIXER -> "mixer"; DESALTER [desalter, salt water + desalted crude out, no vapour] ->
+  "separator" (the paper's Figure 9 draws it as a 2-phase vessel); FIRED_HEATER [fired heater,
+  flue gas] -> "fired_heater"; ATMOSPHERIC_DISTILLATION_COLUMN with integrated_condenser and
+  integrated_reboiler -> "column_distillation". Its side cuts (Naphtha, Kero, Diesel, AGO) are
+  ordinary product streams created with add_stream; Step 6 turns them into real draws.
 
 7. SELF-CHECK BEFORE ANSWERING
 ------------------------------
@@ -239,8 +286,8 @@ add_stream("S8", "Effluent Water")
   [ ] every TYPES["..."] key exists: pump compressor expander valve mixer tee heater cooler
       heat_exchanger air_cooler fired_heater separator separator_3phase tank reactor_conversion
       reactor_equilibrium reactor_gibbs reactor_cstr reactor_pfr column_distillation
-      column_absorber column_reboiled_absorber column_refluxed_absorber column_shortcut
-      component_splitter recycle adjust set spreadsheet pipe
+      column_absorber column_reboiled_absorber column_refluxed_absorber column_3phase
+      column_extractor component_splitter recycle adjust set spreadsheet pipe
   [ ] the block starts with the Step 4 marker, contains the Step 5 marker, contains no
       Step 1/2/3/6/7 marker, and nothing follows the last add_stream line
   [ ] Steps 1-3 of the script were not touched, even if their content looks unrelated

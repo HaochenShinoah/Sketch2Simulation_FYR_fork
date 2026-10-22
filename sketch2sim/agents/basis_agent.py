@@ -19,6 +19,7 @@ _STEP4_MARKER = r"# === Step 4: Add Unit Operations \(Agent 2\) ==="
 # The helper block between Step 3 and Step 4 is owned by the template, never by
 # the model: the model's Steps 1-3 are spliced in up to this marker.
 _HELPERS_MARKER = r"# === Step 3b: HYSYS COM helpers"
+_STEP2_MARKER = "# === Step 2:"
 _END_OF_BASIS_RE = rf"(?:{_HELPERS_MARKER}|{_STEP4_MARKER})"
 _CLEAN_SUFFIX = {"feed", "fresh", "batch", "raw"}
 
@@ -151,14 +152,42 @@ def _apply_safety_belt(template: str, llm_code: str) -> str:
             "Could not extract Steps 1-3 from Basis output: no '# === Step 1:' "
             f"marker found. Output started with: {preview!r}"
         )
+    model_block = match.group(1)
 
-    step_block = _complete_step3(match.group(1))
+    # Step 1 (HYSYS launch, startup retry, PID log) is owned by the template:
+    # only the case name comes from the model.
+    template_step1 = re.search(
+        rf"(?s)# === Step 1:.*?(?={re.escape(_STEP2_MARKER)})", template
+    )
+    if not template_step1:
+        raise ValueError("Template missing Step 1/2 markers.")
+    step1 = template_step1.group(0)
+    name_match = re.search(r"case_name\s*=\s*([\"'])(.*?)\1", model_block)
+    if name_match:
+        case_name = name_match.group(2).replace('"', "").replace("\\", "")
+        step1 = re.sub(
+            r"case_name\s*=\s*([\"']).*?\1",
+            lambda _: f'case_name = "{case_name}"',
+            step1,
+            count=1,
+        )
+    else:
+        print(
+            "[Basis] WARNING: no string literal for case_name in the model's "
+            "answer; the template's placeholder name is kept."
+        )
+    step2_match = re.search(r"#\s*===\s*Step\s*2\b", model_block)
+    if not step2_match:
+        raise ValueError(
+            "Could not find the '# === Step 2:' marker in the Basis output."
+        )
+    steps_2_3 = _complete_step3(model_block[step2_match.start() :])
+
     pattern = rf"(?s)# === Step 1:.*?(?={_END_OF_BASIS_RE})"
-
     if not re.search(pattern, template):
         raise ValueError("Template missing Step 1/4 markers.")
 
-    return re.sub(pattern, lambda _: step_block + "\n\n", template, count=1)
+    return re.sub(pattern, lambda _: step1 + steps_2_3 + "\n\n", template, count=1)
 
 
 def _system_prompt() -> str:

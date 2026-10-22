@@ -22,14 +22,14 @@ This fork of [OptiMaL-PSE-Lab/Sketch2Simulation](https://github.com/OptiMaL-PSE-
 | 1 | Descriptor | Describes the process in the sketch | vision LLM |
 | 2 | Description Validator | Flags repetition, contradictions, nonsense | LLM (JSON) |
 | 3 | Extractor | Description (+ sketch) → JSON intermediate representation | vision LLM, Structured Outputs |
-| 4A | Mixing-points normalizer | Inserts explicit mixers in front of single-inlet units that receive several streams | rules |
-| 4B | Coupling normalizer | Folds condenser / reflux drum / reflux pump / reboiler into their column (runs before the tees are inserted, so the reflux return still reaches the column) | rules |
-| 4C | Splitting-points normalizer | Inserts explicit tees after single-outlet units or vessel ports that feed several streams | rules |
+| 4A | Mixing-points normalizer | Inserts explicit mixers in front of single-inlet units that receive several streams; recognises fired heaters (by name, or a heater with a flue gas out or a fuel stream in, which tags the unit "fired heater"), keeps their burner streams out of the process pass and merges fuel + air into one burner feed through `MIXER_TO_<unit>_BURNER`; a heater or cooler drawn with two inlets and two outlets is tagged "heat exchanger" and only the inlets that no outlet continues are mixed; heat-duty labels drawn as streams (Q-trim, Q-101) are dropped | rules |
+| 4B | Coupling normalizer | Folds condenser / reflux drum / reflux pump / reboiler into their column (runs before the tees are inserted, so the reflux return still reaches the column); drops the utility streams of the folded units (cooling water, steam) and the internal reflux line of the column, listed under `removed_streams` | rules |
+| 4C | Splitting-points normalizer | Inserts explicit tees after single-outlet units or vessel ports that feed several streams; the flue gas of a fired heater is never teed | rules |
 | 5 | Basis Agent | Case name, property package, HYSYS component list | LLM + RAG (OpenAI embeddings) |
 | 6 | Instantiation Agent | Unit operations and material streams (template Steps 4–5) | LLM + instruction file |
 | 7 | Unit IN/OUT view | Unit-centric view of the stream graph | rules |
 | 8 | Configuration Agent | Connects streams to unit ports (template Step 6) | LLM + instruction file |
-| 9 | Executor + Fixer | Runs the script against HYSYS; on failure the Fixer repairs it from the runtime log (3 retries) | HYSYS COM + LLM |
+| 9 | Executor + Fixer | Runs the script against HYSYS, one HYSYS instance per attempt (every attempt quits its instance; set `S2S_HYSYS_KEEP_OPEN=1` to keep a successful one open); on failure the Fixer repairs Steps 2–6 from the runtime log (3 retries) | HYSYS COM + LLM |
 
 The orchestration lives in `sketch2sim/pipeline.py` (`PipelineConfig` / `run_pipeline`); each agent is a one-node LangGraph graph as in the original.
 
@@ -75,6 +75,8 @@ Optional variables (all have defaults, see `sketch2sim/config.py`):
 | `S2S_*_MAX_OUTPUT_TOKENS` | per-agent output caps (reasoning tokens count against them) | 6k–32k |
 | `S2S_EXECUTOR_TIMEOUT`, `S2S_PYTHON_EXECUTABLE` | HYSYS script timeout (s) and interpreter | `600`, current interpreter |
 | `S2S_HSC_DIR` | where the generated script saves the `.hsc` | `outputs/` |
+| `S2S_HSC_SUFFIX` | suffix of the case file of one attempt (`_attemptN`); set by the executor, not by hand | unset |
+| `S2S_HYSYS_KEEP_OPEN` | `0` quits every HYSYS instance the scripts start (open the saved `.hsc` to look at the flowsheet); `1` keeps the instance of a successful run open, which must then be closed before the next run (a script started next to an open HYSYS attaches to it instead of starting its own process, and `SimulationCases.Add` fails) | `0` |
 | `S2S_STRICT_CONNECTIONS` | `0` → missing stream connections do not fail the script | `1` |
 
 ### 3. Aspen HYSYS (execution stage only)
@@ -100,9 +102,11 @@ Outputs:
 - `logs/step*_…` – every intermediate artefact (description, validation, extraction, normalised structures, unit view, prompts, raw model outputs)
 - `logs/llm_calls.jsonl` – one line per model call (model, tokens, duration, parameters dropped)
 - `outputs/hysys_basis_*.py`, `hysys_instantiation_*.py`, `hysys_configuration_*.py`, `outputs/hysys_combined_latest.py` – generated scripts
-- `outputs/<case name>.hsc` – the HYSYS case written by the script
+- `outputs/<case name>_attemptN.hsc` and `outputs/<case name>_attemptN_topology.json` – the case each attempt saved and the per-unit feeds/products read back from it; the successful attempt is copied to `outputs/<case name>.hsc`
 
-"Success" means the generated script built and saved the case with every listed stream connected (exit code 0). As in the paper, the case is built, not solved.
+"Success" means the generated script built and saved the case with every listed stream attached, verified by reading the unit ports back (`AttachedFeeds` / `AttachedProducts`) after each connection and again before saving (exit code 0). A connection that HYSYS accepts without attaching anything counts as a failure, and the topology JSON lets a run be audited without opening HYSYS. As in the paper, the case is built, not solved.
+
+**What HYSYS still reports.** A built case still shows "Required Info" messages: energy streams, reaction sets, column specifications and stream conditions (temperature, pressure, flow, composition) are not part of this pipeline, so pumps ask for an energy stream, reactors for a reaction set, columns for specifications and feed streams for conditions. This is the expected state of a case that is built, not specified; it does not mean a connection is missing.
 
 ---
 
@@ -110,21 +114,20 @@ Outputs:
 
 `sketch2sim/instructions/` contains three files the code agents work with:
 
-- `hysys_template_base.py` – the script skeleton with the Step 1–7 markers. Compared with the original it has a helper block (Step 3b) that the agents call instead of writing raw COM calls: `add_unit`, `add_stream`, `connect`, `connect_column_feed`, `connect_column_product`. Each helper tries an ordered list of HYSYS type strings (`TYPES`) or port members (`PORTS`), logs what worked, and reports what did not; `finish_connections()` makes the script exit with code 2 when a listed connection could not be made, which triggers the Fixer with the exact COM error texts.
+- `hysys_template_base.py` – the script skeleton with the Step 1–7 markers. Compared with the original it has a helper block (Step 3b) that the agents call instead of writing raw COM calls: `add_unit`, `add_stream`, `connect`, `connect_energy`, `connect_column_feed`, `connect_column_product`, `skip`. `TYPES` holds one verified HYSYS type string per equipment category and `PORTS` one verified port member per connection role; `add_unit` loads the column template (`LoadColumnTemplate`) right after creating a column, and every helper reads the attachment back from the unit's `AttachedFeeds` / `AttachedProducts` and logs it. `finish_connections()` re-checks every attachment and makes the script exit with code 2 when a listed connection could not be made, which triggers the Fixer with the exact COM error texts. The file head and Step 1 (HYSYS start-up with its retry and PID log), Step 3b and Step 7 (summary, save, exit code) are owned by the template: the pipeline re-inserts them from the basis output (a verbatim copy of the template with the case name filled in) before every execution, so the Fixer can only change Steps 2–6 of the agents' code.
 - `instantiation_instructions_simple_v5.txt` – how to map sketch equipment to the `TYPES` categories, naming rules, what not to do, worked examples (case studies 1 and 4).
 - `configuration_instructions_simple_v5.txt` – port roles per unit category, outlet roles from `connect_point`, column feed/product rules, worked examples.
 
-**How verified these are.** The original files were written against a live HYSYS V11; this fork was built without HYSYS access, from the paper, the released code, and public HYSYS automation code (notably the `aspen-pysys` package and the CAChemE column scripts). Verified from working code (including two scripts run against HYSYS V14): the type strings `pumpop valveop mixerop teeop heaterop coolerop heatexop compressor flashtank dynamicfiredheaterop conversionreactorop distillation absorber shdistop fractop recycle adjust setop spreadsheetop` (`flashtank` is the 2-phase separator; `separatorop` does not exist on V14), the property-package name `"PengRob"`, the single-port members `FeedStream / ProductStream / EnergyStream` (assign the stream object), the exchanger members `TubeSideFeed / TubeSideProduct / ShellSideFeed / ShellSideProduct`, the column sub-flowsheet (`ColumnFlowsheet.Operations` → `Main Tower` / `Main TS`, `Condenser`, `Reboiler`; `SpecifyFeedLocation`, `AddFeedStream`, `NumberOfTrays`, `AddDrawStream`) and holding the solver (`case.Solver.CanSolve = False`) while the flowsheet is built. Not verified (candidates tried in order): 3-phase separator / tank / expander / reactor-variant type strings, `Feeds.Add` (present in one V14 environment, absent in another), `VapourProduct / LiquidProduct`, the column product members, the argument order of `Operations.Add` (all three shapes are tried) and side-draw attachment (which the paper also reports as unsupported).
+**How verified these are.** The original files were written against a live HYSYS V11; this fork's versions were first recreated from the paper, the released code and public HYSYS automation code, and then **verified live on Aspen HYSYS V11 on 2026-10-22**: a discovery run over every template category and port member (`logs/hysys_com_discovery.md`) plus a series of column, fired-heater, separator and lifecycle experiments whose results are recorded, with the negative results, in [`docs/HYSYS_COM_FACTS.md`](docs/HYSYS_COM_FACTS.md). Every type string in `TYPES` and every port member in `PORTS` creates or attaches what it claims on V11, including the ones that were guesses before: `sep3op` (3-phase separator), `kineticreactorop` / `pfreactorop` (CSTR / PFR), `threephase` / `liqliqextractor` (3-phase column / extractor), the fired-heater members `RadInlet.Add / RadOutlet.Add / CombustionProduct / BurnerFeed`, the column recipe (`Operations.Add` creates an empty shell; `LoadColumnTemplate` installs `Main Tower` / `Condenser` / `Reboiler`; feeds through `AddFeedStream` on the tray section, products through `TopVapourProduct / TopLiquidProduct / TopWaterProduct / BtmLiquidProduct`, side draws through `AddDrawStream`), and the fact that a 2-phase vessel accepts `HeavyLiquidProduct` without attaching anything, which is why the helper block verifies every attachment by reading the ports back. Still unverified: the product members of `kineticreactorop` and `pfreactorop` (`Product` on the PFR), connections on the shortcut column (`shdistop` has no `ColumnFlowsheet`), and the `rebabs` / `refabs` / `liqliqex` template names (their no-argument form was verified).
 
-The evidence behind every type string and port member, with sources and confidence, is in [`docs/HYSYS_COM_FACTS.md`](docs/HYSYS_COM_FACTS.md).
-
-**Pinning the facts on the HYSYS laptop.** Run once:
+**Re-checking on another HYSYS version.** Run, with HYSYS closed:
 
 ```bash
-python tools/hysys_discover_com_api.py
+python tools/hysys_discover_com_api.py            # writes logs/hysys_com_discovery.{json,md}
+python tools/hysys_discover_com_api.py --visible  # show the HYSYS window
 ```
 
-It reads `TYPES` and `PORTS` from the template, creates a scratch case, tries every candidate type string in the template's order (with the three `Operations.Add` call shapes), lists the stream-port members of every object HYSYS creates, probes every template port member with real streams and writes `logs/hysys_com_discovery.{json,md}`; the report says per category whether the template's first choice worked. Use it to reorder or trim `TYPES` / `PORTS` in the template and, if you like, to mark the corresponding lines of the instruction files as verified.
+It reads `TYPES` and `PORTS` from the template, starts its own HYSYS instance (`DispatchEx`, retrying `SimulationCases.Add` while HYSYS starts), creates a scratch case, tries every candidate type string in the template's order, lists the stream-port members of every object HYSYS creates, probes every template port member with real streams and reads `AttachedFeeds` / `AttachedProducts` back after each probe, so the report distinguishes "attached" from "accepted but not attached"; columns get their template loaded and their feed, product and side-draw members probed the same way. At the end it quits its instance and waits until the process has exited. The report says per category whether the template's first choice worked; use it to edit `TYPES` / `PORTS` and the instruction files when a HYSYS version behaves differently.
 
 ---
 
@@ -152,8 +155,8 @@ Decoding follows the paper where the API allows it (temperature 0, seed 42 in Ch
 ├── run_workflow.ipynb                  # notebook entry point (PipelineConfig + run_pipeline)
 ├── requirements.txt / pyproject.toml   # dependencies, ruff, pytest; `pip install -e .`
 ├── images/                             # case-study sketches cs1–cs4
-├── tools/hysys_discover_com_api.py     # one-off HYSYS COM probe (Windows)
-├── docs/HYSYS_COM_FACTS.md             # sources behind the instruction files
+├── tools/hysys_discover_com_api.py     # HYSYS COM probe with read-back (Windows; re-run on a new HYSYS version)
+├── docs/HYSYS_COM_FACTS.md             # COM facts verified on Aspen HYSYS V11 (2026-10-22), incl. negative results
 ├── tests/                              # offline test-suite (fake LLM, fake COM); no API key needed
 └── sketch2sim/
     ├── config.py                       # models, decoding, timeouts (env-driven)
@@ -177,4 +180,4 @@ pytest -q      # runs the whole pipeline on case study 1 with a fake model, and 
 
 ## Status
 
-Research/prototype workflow, ported to the OpenAI API. Steps 1–8 are exercised offline by the tests; Step 9 and the exact HYSYS COM member names must be confirmed on a machine with Aspen HYSYS (see `tools/hysys_discover_com_api.py`).
+Research/prototype workflow, ported to the OpenAI API. Steps 1–8 are exercised offline by the tests; Step 9 and the HYSYS COM type strings and member names were confirmed live on Aspen HYSYS V11 on 2026-10-22 (`docs/HYSYS_COM_FACTS.md`); re-run `tools/hysys_discover_com_api.py` before trusting them on another HYSYS version.

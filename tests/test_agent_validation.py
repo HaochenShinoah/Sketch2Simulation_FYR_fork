@@ -75,6 +75,67 @@ def test_configuration_validation():
         ca._validate_step_6('connect("P-1", "S1", "single_in")', UNIT_VIEW)
 
 
+_SCRIPT = (
+    "import os\n# === Step 1: Launch ===\ncase_name = 'x'\n"
+    "# === Step 2: Setup ===\nproperty_package = 'PengRob'\n"
+    "# === Step 3b: HYSYS COM helpers ===\nTYPES = {{}}\n"
+    "# === Step 4: Add Unit Operations (Agent 2) ===\nunits = {{}}\n"
+    'add_unit("P-1", "Pump", TYPES["pump"])\n'
+    'add_unit("T-1", "Column", TYPES["column_distillation"])\n'
+    "# === Step 5: Add Material Streams (Agent 2) ===\nstreams = {{}}\n"
+    'add_stream("S1", "in")\nadd_stream("S2", "out")\n'
+    "# === Step 6: Connect Streams (Agent 3) ===\n# --- P-1 (Pump) ---\n"
+    "{step6}"
+    "# === Step 7: Save Simulation ===\ncase.SaveAs(path)\n"
+)
+_COLUMN_STRUCTURE = json.dumps(
+    {
+        "units": [
+            {"id": "P-1", "name": "Pump", "tags": ["pump"]},
+            {"id": "T-1", "name": "Column", "tags": ["column"]},
+        ],
+        "feed_streams": [
+            {"id": "S1", "to_unit": "P-1", "name": "in", "connect_point": "side"}
+        ],
+        "intermediate_streams": [],
+        "product_streams": [
+            {"id": "S2", "from_unit": "P-1", "name": "out", "connect_point": "side"}
+        ],
+    }
+)
+
+
+def test_fixed_script_validation():
+    from sketch2sim.agents.fixer_agent import validate_fixed_script
+
+    good = _SCRIPT.format(
+        step6='connect("P-1", "S1", "single_in")\nconnect("P-1", "S2", "single_out")\n'
+    )
+    assert validate_fixed_script(good, _COLUMN_STRUCTURE, UNIT_VIEW) == []
+    # skip() on a column is refused
+    bad = _SCRIPT.format(
+        step6='connect("P-1", "S1", "single_in")\nskip("T-1", "S2", "no free vessel port")\n'
+    )
+    problems = validate_fixed_script(bad, _COLUMN_STRUCTURE, UNIT_VIEW)
+    assert any("skip() is not allowed on column 'T-1'" in p for p in problems)
+    # helpers or raw COM calls in Steps 4-6 are refused
+    bad = _SCRIPT.format(
+        step6='def connect(*a):\n    pass\nconnect("P-1", "S1", "single_in")\n'
+        'connect("P-1", "S2", "single_out")\n'
+    )
+    problems = validate_fixed_script(bad, _COLUMN_STRUCTURE, UNIT_VIEW)
+    assert any("may only call the helpers" in p for p in problems)
+    # a missing template marker is refused before anything else
+    problems = validate_fixed_script(
+        good.replace("# === Step 7:", "# Step 7"), None, None
+    )
+    assert problems and "exactly once" in problems[0]
+    # a stream that is never connected is refused
+    bad = _SCRIPT.format(step6='connect("P-1", "S1", "single_in")\n')
+    problems = validate_fixed_script(bad, _COLUMN_STRUCTURE, UNIT_VIEW)
+    assert any("never connected" in p for p in problems)
+
+
 def test_dotenv_parsing(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(

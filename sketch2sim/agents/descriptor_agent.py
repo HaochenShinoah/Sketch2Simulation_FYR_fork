@@ -57,6 +57,18 @@ def _build_prompt() -> str:
         "- Describe the process from left to right.\n"
         "- List each visible equipment item once.\n"
         "- Do not invent hidden equipment.\n"
+        "- Labels pointing at the inside of a vessel (coalescer section, catalyst bed, "
+        "demister) describe internals, not separate equipment.\n"
+        "- A storage tank or feed drum at the start of the process, drawn with only "
+        "an outlet, is fed by the process feed; say so. This never applies to reflux "
+        "drums, accumulators or knock-out drums downstream of a condenser or "
+        "separator.\n"
+        "- Mention flue gas from fired heaters and water drawn from condensers as streams.\n"
+        "- Labels starting with Q (Q-trim, Q-101, Qcond) are heat duties, not streams; "
+        "do not list them as streams.\n"
+        "- When a line joins another line before a unit, say which unit the combined "
+        "stream enters.\n"
+        "- Quote tray or stage numbers written on columns.\n"
         "- Do not write code.\n"
     )
 

@@ -114,22 +114,27 @@ def run_merge_execute_with_runtime_fixer(
     ExecutorState,
     is_success,
     finish_success,
+    structure_json_str: str | None = None,
     log_prefix: str = "step9_executor",
     tail_lines: int = 300,
 ):
+    """Step 9: merge, execute, and repair with the Fixer until the script succeeds.
+
+    Every attempt saves its own case (``<case>_attemptN.hsc``) and topology
+    report; the successful attempt is copied to ``<case>.hsc`` and the report
+    into the log directory.
+    """
     merge_kwargs = {
         "basis_path": basis_path,
         "configuration_path": configuration_path,
         "output_path": combined_path,
     }
-    executor_state = ExecutorState(
-        code_path=combined_path, log_dir=log_dir, output_dir=output_dir
-    )
 
     base_fixer_kwargs = {
         "instantiation_instruction_paths": instantiation_instruction_paths,
         "configuration_instruction_paths": configuration_instruction_paths,
         "unit_view_json_str": unit_view_json_str,
+        "structure_json_str": structure_json_str,
         "model_name": fixer_model_name,
         "temperature": 0.0,
         "log_dir": log_dir,
@@ -139,6 +144,13 @@ def run_merge_execute_with_runtime_fixer(
 
     for attempt in range(1, max_retries + 1):
         print(f"\n[Executor] Attempt {attempt}/{max_retries}...")
+        executor_state = ExecutorState(
+            code_path=combined_path,
+            log_dir=log_dir,
+            output_dir=output_dir,
+            attempt=attempt,
+            hsc_suffix=f"_attempt{attempt}",
+        )
 
         exec_result, final_summary, _ = merge_execute_and_log(
             merge_fn=merge_fn,
@@ -150,12 +162,10 @@ def run_merge_execute_with_runtime_fixer(
         )
 
         if is_success(final_summary):
-            finish_success(log_dir, output_dir)
+            kept = _keep_successful_case(exec_result, attempt, log_dir)
+            finish_success(log_dir, output_dir, kept)
             return current_configuration_path
 
-        saved = _keep_attempt_case(exec_result, attempt)
-        if saved:
-            print(f"Case of attempt {attempt} kept at: {saved}")
         print("\nExecution failed. Calling fixer using runtime failure log...")
 
         current_configuration_path = handle_runtime_failure_and_fix(
@@ -171,22 +181,32 @@ def run_merge_execute_with_runtime_fixer(
 
     raise RuntimeError(
         f"HYSYS execution failed after {max_retries} runtime-fixer attempts. "
-        f"See logs in: {log_dir} (partially built cases, if any, are kept as "
-        "*_attemptN.hsc next to the generated scripts)."
+        f"See logs in: {log_dir} (the case and topology report of every attempt "
+        "are kept as *_attemptN.hsc / *_attemptN_topology.json next to the "
+        "generated scripts)."
     )
 
 
-def _keep_attempt_case(exec_result: dict, attempt: int) -> str | None:
-    """Copy the .hsc a failed attempt saved, so later attempts cannot overwrite it."""
+def _keep_successful_case(exec_result: dict, attempt: int, log_dir: str) -> dict:
+    """Copy the successful attempt's case to ``<case>.hsc`` and its topology to the logs."""
+    kept: dict[str, str] = {}
     match = re.search(r"Simulation saved at: (.+)", exec_result.get("stdout") or "")
     if not match:
-        return None
+        return kept
     source = Path(match.group(1).strip())
-    if not source.is_file():
-        return None
-    target = source.with_name(f"{source.stem}_attempt{attempt}{source.suffix}")
-    try:
-        shutil.copy2(source, target)
-    except OSError:
-        return None
-    return str(target)
+    suffix = f"_attempt{attempt}"
+    if source.is_file() and source.stem.endswith(suffix):
+        target = source.with_name(source.stem[: -len(suffix)] + source.suffix)
+        try:
+            shutil.copy2(source, target)
+            kept["Case"] = str(target)
+        except OSError:
+            pass
+    topology = source.with_name(source.stem + "_topology.json")
+    if topology.is_file():
+        try:
+            shutil.copy2(topology, Path(log_dir) / "step9_topology.json")
+            kept["Topology"] = str(Path(log_dir) / "step9_topology.json")
+        except OSError:
+            pass
+    return kept

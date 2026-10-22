@@ -1,195 +1,214 @@
-# HYSYS COM automation facts behind the instruction files
+# HYSYS COM facts behind the template and the instruction files
 
-Collected in October 2026 while recreating `instantiation_instructions_simple_v5.txt` and `configuration_instructions_simple_v5.txt` without access to an Aspen HYSYS installation. Everything marked **verified** was read verbatim in working public code; **likely** comes from secondary sources (search snippets of pages that were unreachable from the build environment); **uncertain** is a hypothesis that `tools/hysys_discover_com_api.py` is meant to settle on a HYSYS machine. The template helpers (`TYPES`, `PORTS` in `sketch2sim/instructions/hysys_template_base.py`) try the verified spelling first and the candidates after it.
+Record of what is verified on **Aspen HYSYS V11** (ProgramBuild 110395, Windows, pywin32 late-bound `win32com.client.DispatchEx("HYSYS.Application")`) on **2026-10-22**. It replaces the earlier version of this file, which had been compiled from public code without a HYSYS installation. The template helpers (`TYPES`, `PORTS`, `COLUMN_TEMPLATES` in `sketch2sim/instructions/hysys_template_base.py`) carry exactly the strings and members listed here; `connect`, `connect_column_feed` and `connect_column_product` read every attachment back from `AttachedFeeds.Names` / `AttachedProducts.Names`, because several members are accepted by HYSYS without attaching anything (sections 2.4, 3.4).
 
-Target: Aspen HYSYS V11 driven from Python via `win32com.client.Dispatch("HYSYS.Application")` (late-bound), as in the Sketch2Simulation template
-(`flowsheet.Operations.Add(name, type)`, `flowsheet.MaterialStreams.Add(name)`, `units[k].<port> = streams[s]`).
+Target call shapes, as in the template: `flowsheet.Operations.Add(name, type)`, `flowsheet.MaterialStreams.Add(name)`, `units[k].<member> = streams[s]` (property) or `units[k].<collection>.Add(streams[s])` (collection).
 
-Confidence legend: **verified** = seen verbatim in a primary or working-code source; **likely** = seen in a secondary source / search-engine snippet of a blocked primary, or inferred from a close analogue; **uncertain** = hypothesis, must be tested on the Windows/HYSYS machine.
+Confidence legend: **verified** = executed live on V11 with the stated result; **negative** = executed live and failed, or was accepted and had no effect; **untested** = not executed (listed only where the distinction matters for the helpers). Nothing below is inferred from documentation or third-party code.
 
-Primary working-code sources (abbreviated in the table):
-- **PYSYS** = aspen-pysys 0.1.0a5 sdist from PyPI, https://files.pythonhosted.org/packages/55/bc/de99b05f0353cec37e5012e4a601763d13aac292491c274a9c207cbda0cf/aspen_pysys-0.1.0a5.tar.gz
-- **SURADECH** = https://raw.githubusercontent.com/SuradechKKPB/AutomatedHYSYS/master/vba_function (Excel VBA, HYSYS V10)
-- **CACHEME** = https://raw.githubusercontent.com/CAChemE/stochastic-optimization/master/ConventionalDistillationColumn/{hyInterface.py,column_algorithm.py} (pywin32, ~HYSYS V8/V9)
-- **EDGAR** = https://raw.githubusercontent.com/edgarsmdn/Aspen_HYSYS_Python/main/HYSYS_python_spreadsheets.py
-- **OSCAR** = https://raw.githubusercontent.com/oscarcontrerasnavas/hysys-to-excel-intro/master/script.vb
-- **PSANTOS** = https://raw.githubusercontent.com/pSantosb/Hysys-connection-Excel-Matlab-Python-Unity/main/Steady-State/Python/Connections.py
-- **PAPER** = Bahamdan et al., Sketch2Simulation, arXiv:2603.24629 (2026)
-- **FORK** = this repository
-- Secondary (DNS-blocked in sandbox, seen via search snippets only): CHERES-32153/32150/30920 = cheresources.com threads; CUSTGUIDE = Aspen HYSYS Customization Guide V7.3 (vdoc.pub / researchgate / pdfcoffee copies); MATHWORKS 305705 / 2054022; HYSYSBLOG = hysyssimulations.blogspot.com.
+Sources (abbreviations used in the tables):
 
----
+- **DISC** = `logs/hysys_com_discovery.md` / `.json`: the run of `tools/hysys_discover_com_api.py` on 2026-10-22 11:17 (build 110395; one new `AspenHysys.exe`, `SimulationCases.Add` on the first try, `Quit()` confirmed by PID). It creates every template category, exercises every port member of the helper's `PORTS` table **with read-back through `AttachedFeeds` / `AttachedProducts`**, loads the column template of all six column categories and exercises their feed, draw and product members, and lists the stream-port members of every created object. The earlier run of the same day (04:32, member lists without read-back) is kept as `logs/hysys_com_discovery_0432.*`.
+- **EXP1 … EXP6** = `col_exp_report.json`, `col_exp2_report.json`, `col_exp3_report.json`, `col_exp4_report.json`, `col_exp5_report.json`, `col_exp6_report.json`: step logs written by `col_exp.py` … `col_exp6.py` in the scratch directory `%LOCALAPPDATA%\Temp\s2s_exp` (kept with the change plan's evidence; not part of the repository). "step n" refers to the `=== n. …` headings inside each file.
+- **QUIT** = `quit_test_report.json` (`quit_test.py`).
+- **REPLAY** = `replay_out/replay_cs3.log`, `replay_out/replay_cs41.log`: the agents' first-attempt cs3 and cs41 scripts re-run with the prototype helper block (`helpers_v6.py`, `replay.py`).
+- **INSPECT** = `inspect_report.json` (the two replayed cases reopened through COM with `SimulationCases.Open`) and `inspect_report_cs1_cs2.json` (`outputs/cs1/Crude_Oil_Desalting.hsc` and `outputs/cs2/Jet Fuel Merox Sweetening.hsc` reopened).
+- **LOGS** = the executor logs of the pipeline runs of the same day in `logs/cs3`, `logs/cs31`, `logs/cs4`, `logs/cs41`.
 
-## 1. Creation calls (Steps 4-5)
-
-| id | unit / topic | claim | confidence | best source | evidence (verbatim) | conflicts / notes |
-|---|---|---|---|---|---|---|
-| T-add-signature | Operations.Add | `Flowsheet.Operations.Add(name, typeString)` creates a unit op and returns the object; 1st arg = display name, 2nd = lowercase internal TypeName (not the VBA class name). | verified (call shape) | PYSYS `src/aspen_pysys/case/flowsheet.py` + `base/primitive/dictionary.py` | `obj = self._unit_operations.add(name, unit_op_type)` … `add_func = self._dict_obj.get_func("Add"); return add_func.call(*args)` | Cross-confirmed (likely) by CHERES-32150: `Set Compressor = hyCase.Flowsheet.Operations.Add("compressor_name", "compressor")` and CHERES-30920: `Set hySprd = hyCase.Flowsheet.Operations.Add("MySprd", "spreadsheetop")`. |
-| T-typename-eq-add | TypeName | The strings used by Add are exactly the values HYSYS reports in `op.TypeName` (PYSYS compares them and raises on mismatch; exercised on real .hsc cases). | verified | PYSYS `operation.py`, `constants.py` | `TYPE_NAME_STR = "TypeName"` … `elif model_type != type_name: message = (f"Unit operation {self.get_name()} is not of type {model_type}" f" (actual: {type_name}).")` | Type filter is case-insensitive (`Operations("SpreadsheetOp")` and `Operations("spreadsheetop")` both work in VBA). |
-| T-add-returns-none | Operations.Add failure signal | On failure `Add` may return `None` rather than raise; working code treats `None` as "not added". | verified | PYSYS `flowsheet.py` | `if obj is None: message = "Unit operation may not have been added."` | Also a KeyError wrapper: `"Unit operation of type '{unit_op_type}' cannot be added."` Generated code should assert the return value is not None. |
-| T-pump | Pump | type string `"pumpop"` | verified | PYSYS `operation_type.py` L52; exercised in `examples/test.py` on "P-102" | `PUMP = "pumpop"` | — |
-| T-valve | Valve | `"valveop"` | verified | PYSYS L55; exercised on "VLV-100" | `CONTROL_VALVE = "valveop"` | — |
-| T-compressor | Compressor | `"compressor"` (NO "op" suffix) | verified | PYSYS L58; exercised on "K-100" | `COMPRESSOR = "compressor"` | Cross-confirmed by CHERES-32150 Add call. VBA class is `CompressOp`; do not use `compressorop`. |
-| T-mixer | Mixer | `"mixerop"` | verified | PYSYS L44 | `MIXER = "mixerop"` | VBA class `MixerOp` (HYSYSBLOG, likely). |
-| T-tee | Tee / splitter | `"teeop"` | verified | PYSYS L47; SURADECH | `Set tee_highAPI = simCase.Flowsheet.Operations("teeop").Item("TEE_HIGH_API_OIL")` | Independently verified by two sources. |
-| T-heater | Heater | `"heaterop"` | verified | PYSYS L13; `examples/simcase_validity.py` | `HEATER = "heaterop"` | — |
-| T-cooler | Cooler | `"coolerop"` | verified | PYSYS L16 | `COOLER = "coolerop"` | — |
-| T-heatex | Shell & tube heat exchanger | `"heatexop"` | verified | PYSYS L19; `examples/pinch_violations.py` | `HEAT_EXCHANGER = "heatexop"` | — |
-| T-firedheater | Fired heater / furnace | `"dynamicfiredheaterop"` | verified (TypeName) / likely (Add acceptance) | PYSYS L22 | `FIRED_HEATER = "dynamicfiredheaterop"` | Only string found; not exercised by a bundled example. |
-| T-conversionreactor | Conversion reactor | `"conversionreactorop"` | verified | PYSYS L74 | `CONVERSION_REACTOR = "conversionreactorop"` | Only reactor string found anywhere. |
-| T-compsplitter | Component splitter | `"fractop"` | verified | PYSYS L63 | `COMPONENT_SPLITTER = "fractop"` | — |
-| T-shortcut | Shortcut column | `"shdistop"` | verified | PYSYS L66 | `SHORTCUT_COLUMN = "shdistop"` | — |
-| T-distillation | Distillation column (template) | TypeName `"distillation"`; PYSYS offers it as an Add type. | verified (TypeName) / likely (Add) | PYSYS L69; `examples/test.py` (`HysysDistillationColumn.from_obj(flowsheet.get_unit_operation("SAD"))`) | `DISTILLATION_COLUMN = "distillation"` | Whether `Operations.Add(name,"distillation")` yields tray section + Condenser + Reboiler (full template) is UNTESTED (R1, R3, R4 agree). See COL-add-template. |
-| T-recycle | Recycle | `"recycle"` (no suffix) | verified | PYSYS L33 | `RECYCLE = "recycle"` | — |
-| T-adjust | Adjust | `"adjust"` (no suffix) | verified | PYSYS L27 | `ADJUST = "adjust"` | VBA class `AdjustOp` (SURADECH) differs. |
-| T-set | Set | `"setop"` | verified | PYSYS L36 | `SET = "setop"` | — |
-| T-spreadsheet | Spreadsheet | `"spreadsheetop"` | verified | PYSYS L30; SURADECH; hairizuanbinnoorazman/HYSYS-to-Excel | `Set CGR = simCase.Flowsheet.Operations("SpreadsheetOp").Item("SPRDSHT-1-2")` | CHERES-30920 shows it in Add (likely). |
-| T-streamcutter | Stream cutter | `"streamcutterop"` | verified | PYSYS L39 | `STREAM_CUTTER = "streamcutterop"` | — |
-| T-stream-typenames | Streams | Stream TypeName is `"materialstream"` / `"energystream"`. | verified | PYSYS `model/process_stream/stream_type.py` | `MATERIAL_STREAM = "materialstream"` … `ENERGY_STREAM = "energystream"` | Used to split AttachedFeeds into material vs energy. |
-| T-separator | 2-phase separator (vertical) | **`flashtank`** (live-verified on HYSYS V14, see section 6; `separatorop` reported absent there). | likely (V14 verified, V11 untested) | (negative result; PYSYS `docs/quickstart.md` shows a separator's attrs but not its TypeName) | `{'AddRef','Application','AttachedFeeds','AttachedLogicalOps','AttachedProducts',…,'VesselPressureValue','VesselTemperature',…,'VisibleTypeName','name'}` | Extra lookups by synthesizer found nothing. Must be discovered on the laptop (see O-discovery). |
-| T-3phase-separator | 3-phase separator | NOT FOUND. | uncertain | — | — | Candidate by analogy only. |
-| T-tank | Tank | NOT FOUND. | uncertain | — | — | Candidate `"tankop"` by analogy only (not seen). |
-| T-expander | Expander | NOT FOUND; VBA class `ExpandOp` (CHERES-6303, HYSYS 2006) suggests `"expandop"`. | uncertain | https://www.cheresources.com/invision/topic/6303-hysys-customization/ (snippet) | `ExpandOp` | Unverified. |
-| T-other-reactors | Equilibrium / Gibbs / Yield-shift / CSTR / PFR | NOT FOUND. | uncertain | — | — | Only `conversionreactorop` verified. |
-| T-absorbers | Absorber / Reboiled / Refluxed absorber / LLE / 3-phase distillation | NOT FOUND; only palette names documented. | uncertain | https://design.cbe.cornell.edu/index.php?title=Column (snippet) | `The Distillation template is therefore a combination of the Reboiled Absorber and Refluxed Absorber Templates` | Guesses `absorber`, `reboiledabsorber`, `refluxedabsorber` are NOT evidence. |
-| T-other-ops | Air cooler, LNG, pipe segment, relief valve, ejector, balance | NOT FOUND, except the hint that pipe segment's string is `pipeseg`. | uncertain | CHERES-32153 (snippet) | type strings are "weird names just like pipeseg instead of pipe segment" and "some end in Op, such as TeeOp" | — |
-| T-vba-class-names | Type-library coclass names | Early-bound VBA classes `AdjustOp`, `SpreadsheetOp`, `TeeOp`, `HYSYS.Application` (verified); `MixerOp`, `CompressOp`, `ExpandOp`, `ColumnOp`, `PumpOp` (likely). These differ from the lowercase TypeName strings and must not be used as Add arguments without testing. | verified (first group) | SURADECH | `Public Adj_oil As AdjustOp … Public CGR As SpreadsheetOp … Public tee_highAPI As TeeOp, tee_lowAPI As TeeOp` | CUSTGUIDE snippet: `Set hyOp = hyCase.Flowsheet.Operations("ColumnOp").Item(0)`; `Operations("PumpOp")` — class names used as filters work because the filter is case-insensitive on *either* form? Unknown; only TypeName form verified for Add. |
-| T-ops-filter | Operations collection filter | `Flowsheet.Operations(<type>)` returns the sub-collection of that type; `.Item(name)` or `.Item(index)` picks one; `.Names` lists names; `Operations.Item(name)` works unfiltered. | verified | SURADECH; CACHEME (`Column_Name = HyOperations.Names[0]`) | `Set Adj_CO2 = simCase.Flowsheet.Operations.Item("ADJ-CO2")` … `Adj_CO2.IsIgnored = True` | `IsIgnored` is a settable bool on any op (also PYSYS). |
-| T-visibletypename | VisibleTypeName | Every op also exposes `VisibleTypeName` (human-readable palette name). | verified | PYSYS `constants.py`, `named_object.py` | `VISIBLE_TYPE_NAME_STR = "VisibleTypeName"` | Use to discover unknown strings. |
-| O-discovery | Discovering missing type strings | Recipe: build one of each op in the GUI (or open a saved case) then `for n in case.Flowsheet.Operations.Names: op=case.Flowsheet.Operations.Item(n); print(n, op.TypeName, op.VisibleTypeName)`; or run `python -m win32com.client.makepy` on the HYSYS type library and grep `gen_py`. | other | (recommendation shared by R1, R2, R3) | — | Add this as a developer note, not in the LLM prompt. |
-| S-matstreams-add | MaterialStreams.Add | `Flowsheet.MaterialStreams.Add(name)` returns the new stream object (None on failure). | verified | PYSYS `flowsheet.py` L133-151 | `obj = self._material_streams.add(name)` … `if obj is None: message = "Material stream may not have been added."` | CHERES-32150 (likely): `Set NewStream = hyCase.Flowsheet.MaterialStreams.Add("Stream_Name")`. |
-| S-energystreams-add | EnergyStreams.Add | `Flowsheet.EnergyStreams.Add(name)` exists and returns the created energy stream. | verified | PYSYS `flowsheet.py` L175-193 | `obj = self._energy_streams.add(name)` … `"Energy stream may not have been added."` | — |
-| S-energy-alt | Energy stream via IsEnergyStream | Alternative (CUSTGUIDE pump macro): `MaterialStreams.Add(name)` then `newstr.IsEnergyStream = True`, then `Pump.EnergyStream = newstr`; stream named `<op>_W`. | likely | https://vdoc.pub/documents/aspen-hysys-customization-guide-29tdc3mctk60 (snippet) | "calls `strs.Add(strName)` on the `MaterialStreams` collection, sets `newstr.IsEnergyStream = True`, then assigns the result to `Pump.EnergyStream`" | Prefer S-energystreams-add (verified); keep this as fallback. |
-| S-flowsheet-collections | Flowsheet collections | Flowsheet exposes `Operations`, `MaterialStreams`, `EnergyStreams`, `Streams` collections and a `FluidPackage` object. | verified | PYSYS `flowsheet.py` L30-64; EDGAR; PSANTOS (`simulation.Flowsheet.streams["SourH2O Feed"]`) | `STREAMS_STR = "Streams"` `MATERIAL_STREAMS_STR = "MaterialStreams"` `ENERGY_STREAMS_STR = "EnergyStreams"` `OPERATIONS_STR = "Operations"` | Python item access by `[name]`, `.Item(name)`, or `(name)` all seen. |
-
-## 2. Connection members (Step 6)
-
-| id | unit / topic | claim | confidence | best source | evidence (verbatim) | conflicts / notes |
-|---|---|---|---|---|---|---|
-| C-feedstream | Pump, Compressor, Valve, Recycle | `op.FeedStream` holds the inlet material stream. | verified (getter) / likely (setter) | PYSYS `mixin/feed_stream.py`; setter: CHERES-32153 | `class FeedStreamGetterMixin … self.get_named_obj("FeedStream")` | Setter only from CHERES snippet: `Compressor.FeedStream = InletStream`. |
-| C-productstream | Pump, Compressor, Valve, Recycle | `op.ProductStream` holds the outlet material stream. | verified (getter) / likely (setter) | PYSYS `mixin/product_stream.py` | `class ProductStreamGetterMixin … self.get_named_obj("ProductStream")` | — |
-| C-energystream | Pump, Compressor | `op.EnergyStream` holds the duty/power energy stream. | verified (getter) / likely (setter) | PYSYS `mixin/energy_stream.py`; setter: CUSTGUIDE pump macro | `class EnergyStreamGetterMixin … self.get_named_obj("EnergyStream")` | — |
-| C-assign-works | Direct assignment vs Property() | In VBA, `Compressor.FeedStream = InletStream` (object assignment) works; `Compressor.Property("InletStream") = "MyStream"` failed. Outlet = ProductStream, energy = EnergyStream. | likely | https://www.cheresources.com/invision/topic/32153-adding-inlet-to-compressor-through-vba-hysysunisim/ (snippet) | `Set Compressor = hyCase.Flowsheet.Operations().Item("compressor_name") … Compressor.FeedStream = InletStream` | R2 rated the member names "uncertain" because only a paraphrase was seen; R1 saw code-like snippet. Merged: likely. |
-| C-heater-cooler-ports | Heater, Cooler, Fired heater, Heat exchanger | No source shows their port members. By analogy with pump/valve they are expected to be `FeedStream`/`ProductStream`/`EnergyStream` (heater/cooler) and shell/tube side members (exchanger); `TubeSideFeed`/`ShellSideFeed` names are GUESSES. | uncertain | (negative result, R2) | — | PYSYS `heat_exchanger.py` only overrides AttachedFeeds/AttachedProducts. Generated code should fall back to `Feeds.Add`/`Products.Add` (C-mixer-feeds). |
-| C-mixer-feeds | Mixer (and other multi-port ops) | Multi-feed attachment via collections: `op.Feeds.Add(stream)` one at a time, `op.Products.Add(stream)`. | likely | https://pdfcoffee.com/hysys-vba-excel-pdf-free.html (CUSTGUIDE Automation chapter mixer macro, snippet) | "The Add method of the Feeds property is used to add multiple feed streams to a unit operation object one at a time. … hyMix.Feeds.Add hyFeed1 … hyMix.Products.Add hyProduct1" | R1 reported the same guide's separator example as "uncertain" (member could be `Feeds` vs `AttachedFeeds`, arg object vs name). Merged as likely with mixer wording; argument is the stream OBJECT. Synthesizer's extra searches found no further confirmation. |
-| C-separator-feeds | Separator | Separator feeds are attached through the same `Feeds.Add` collection method (CUSTGUIDE). | likely | https://vdoc.pub/documents/aspen-hysys-customization-guide-29tdc3mctk60 (snippet) | "The same guide describes using the `Feeds` collection's `Add` method to attach multiple feeds to units such as a separator" | — |
-| C-separator-products | Separator, Tank, reactors | Product port member names NOT FOUND. Hypotheses to probe: `VapourProduct`, `LiquidProduct`, `HeavyLiquidProduct`/`LightLiquidProduct` (3-phase), or `Products.Add(stream)` (order = vapour first?). | uncertain | (negative result; synthesizer search found nothing) | — | Recommend instruction file to use `Products.Add` and add a comment that vapour/liquid roles must be verified. |
-| C-generic-ops-text | All ops | CUSTGUIDE: "Operation objects contain properties for determining the feeds, products, and additional objects connected to the operation." | likely | https://pdfcoffee.com/hysys-vba-excel-pdf-free.html (snippet) | (as quoted) | Supports Feeds/Products as generic. |
-| C-attached-collections | All ops | Every op exposes read collections `AttachedFeeds`, `AttachedProducts`, `AttachedLogicalOps` (name-indexed). | verified | PYSYS `operation.py` L89-115; `docs/quickstart.md` | `return self.get_dict("AttachedFeeds").map(HysysModel.FACTORY.get_process_stream)` … `AttachedFeeds=('Flash Feed',)` | Whether `AttachedFeeds.Add(stream)` is legal was NOT seen. Use for post-connection validation in generated code. |
-| C-compsplitter-ports | Component splitter | Members `Inlets`, `OverheadOutlets`, `BottomOutlets`, `EnergyInlets` (getters). | verified | PYSYS `types/component_splitter.py` | `self.get_dict("Inlets"); self.get_dict("OverheadOutlets"); self.get_named_obj("BottomOutlets"); self.get_dict("EnergyInlets")` | Setter semantics not shown. |
-| C-streamcutter-ports | Stream cutter | Members `Inlet`, `Outlet`. | verified | PYSYS `types/stream_cutter.py` | (per R3) | — |
-| C-tee-splits | Tee | Split ratios via `.Splits` / `.SplitsValue` / `.Splits.SetValues(arr)`. | verified | SURADECH | `tee_highAPI.Splits.SetValues ratio` (per R1/R3) | Not a connection, but the Tee product order matters for splits. |
-| C-pywin32-putref | pywin32 assignment semantics | `op.FeedStream = stream` in pywin32 invokes `_GetDescInvokeType(entry, INVOKE_PROPERTYPUT)` (uses typelib invkind when available); `__setitem__` passes `DISPATCH_PROPERTYPUT|DISPATCH_PROPERTYPUTREF`. No Python-side auto PUTREF switch. | verified | https://github.com/mhammond/pywin32/blob/main/com/win32com/client/dynamic.py | `invoke_type = _GetDescInvokeType(entry, pythoncom.INVOKE_PROPERTYPUT)` … `pythoncom.DISPATCH_PROPERTYPUT \| pythoncom.DISPATCH_PROPERTYPUTREF,` | Fallbacks if assignment raises: (a) `op.Feeds.Add(stream)`; (b) `op._oleobj_.Invoke(op._oleobj_.GetIDsOfNames(0,'FeedStream'), 0, pythoncom.DISPATCH_PROPERTYPUTREF, 0, stream)`. |
-| C-column-top-level | Distillation column (main flowsheet view) | Column feeds attached on the parent flowsheet appear in `column.AttachedFeeds`; PYSYS requires the same names in `ColumnFlowsheet.FeedStreams`. | verified | PYSYS `distillation_column.py` | `def _confirm_main_and_subflowsheet_feeds_match(self)` … | See COL-* for inner API. |
-
-## 3. Column API
-
-| id | unit / topic | claim | confidence | best source | evidence (verbatim) | conflicts / notes |
-|---|---|---|---|---|---|---|
-| COL-columnflowsheet | ColumnFlowsheet | Column op exposes `.ColumnFlowsheet` sub-flowsheet. | verified | CACHEME `hyInterface.py`; PYSYS | `DistColumn.ColumnFlowsheet = DistColumn.Column.ColumnFlowsheet` | Two independent working-code sources. |
-| COL-tray-section-name | Tray section name | Tray section inside `ColumnFlowsheet.Operations` is `"Main TS"` (CACHEME, older HYSYS) or `"Main Tower"` (PYSYS, newer); MATHWORKS 305705 (HYSYS 7.3) used `"Main_TS"`. Version/template dependent → look up all three. | verified (both names) | CACHEME; PYSYS `_get_main_tower` | `DistColumn.Main_TS = DistColumn.ColumnFlowsheet.Operations.Item('Main TS')` / `self._get_operations().get("Main Tower")` | CONFLICT resolved as version-dependent. For V11, test first. |
-| COL-condenser-reboiler | Condenser / Reboiler | Retrieved as `ColumnFlowsheet.Operations.Item("Condenser")` / `("Reboiler")`; expose `VesselPressure`, `HeatFlow`. | verified | PYSYS `distillation_column.py` | `return self._get_operations().get("Condenser")` … `get_float("VesselPressure")` … `get_float("HeatFlow")` | — |
-| COL-feedstreams | ColumnFlowsheet.FeedStreams | Sub-flowsheet feed collection; `.Item('Feed')`. | verified | CACHEME; PYSYS | `DistColumn.FeedMainTS = DistColumn.FeedStreams.Item('Feed')` | — |
-| COL-addfeedstream | AddFeedStream | `<tray section>.AddFeedStream(feedName: str, tray: int, False)` attaches a feed at a stage; only programmatic 'attach feed to column' member found. | likely | PYSYS `distillation_column.py` `add_material_feed` | `self._get_main_tower().get_func("AddFeedStream").call(feed_name, tray, False)` | Not exercised by shipped examples; 3rd bool unknown; name vs object arg untested. |
-| COL-specifyfeedlocation | SpecifyFeedLocation | `<tray section>.SpecifyFeedLocation(feedStreamObj, stage)` sets stage of an attached feed; direct `FeedColumnStages` set did NOT work (MATHWORKS). | verified | CACHEME `column_algorithm.py`; PYSYS | `HyObject.DistColumn.Main_TS.SpecifyFeedLocation(HyObject.DistColumn.FeedMainTS, Feed_S)` | — |
-| COL-numberoftrays | NumberOfTrays | Stage count via `<tray section>.NumberOfTrays` (r/w; PYSYS min 3). `NumberOfStages` never seen. | verified | CACHEME; PYSYS | `HyObject.DistColumn.Main_TS.NumberOfTrays = NT` | — |
-| COL-run-converge | Run / convergence | `ColumnFlowsheet.Run()`, `.Reset()`, `.CfsConverged`, `.MaximumIterations`, `.CurrentIteration`, `.Specifications.Item('Reflux Ratio').GoalValue`. | verified | CACHEME; PYSYS | `HyObject.DistColumn.Column.ColumnFlowsheet.Specifications.Item('Reflux Ratio').GoalValue = RR` … `.ColumnFlowsheet.Run()` … `.ColumnFlowsheet.CfsConverged` | — |
-| COL-stages | ColumnStages / FeedStages | `ColumnFlowsheet.ColumnStages` keyed `"<n>__<towerName>"` with `.SeparationStage`; tray section `FeedStages[*].FeedStreams` and `.IFaceStageNumber`. | verified | PYSYS | `tray_name = f"{position}__{main_tower_name}"` … `feed_tray.get_int("IFaceStageNumber")` | Older GUIs show `5_Main TS` (single underscore). |
-| COL-feed-name-match | Feed naming | Keep the external stream name identical to the column sub-flowsheet feed name. | verified | PYSYS | `"Feed trays cannot be identified, possibly due to a mismatch in stream names between the main and column flowsheets."` | — |
-| COL-add-template | Creating the column | `flowsheet.Operations.Add("T-100", "distillation")` is the expected creation call, but NO source demonstrates it executing, nor whether Condenser/Reboiler sub-ops and energy streams are auto-created. | likely (call) / uncertain (template contents) | PYSYS `flowsheet.py` | `obj = self._unit_operations.add(name, unit_op_type)` | PAPER says columns are "instantiated using predefined internal templates" — consistent with a template being created. |
-| COL-product-attach | Overhead / distillate / bottoms / water draw / side draws | NO COM member found that attaches external streams as column products; PYSYS only READS products via `AttachedProducts`. | verified (negative) | PYSYS; CACHEME | "Not found in the content: ProductStreams, Main Tower, and column stages." | Hypotheses to probe on the laptop: `ColumnFlowsheet.ProductStreams`, Condenser/Reboiler stream properties, tray-section `AddProductStream`/`AddDrawStream`, `column.Products.Add(stream)`. |
-| COL-energy-attach | Condenser / reboiler duty streams | No source shows attaching external energy streams; CACHEME reads pre-existing `Qcond`/`Qreb` from `Flowsheet.EnergyStreams`; PYSYS reads `HeatFlow` on sub-ops. | verified (negative) | CACHEME | `EnergyStream.Qreb = HyEnergyStream.Item('Qreb')` | — |
-| COL-activate | Activate before column internals | MATHWORKS 2054022: `Main_TS` access failed until `simcase.invoke('Activate')`; `Activate()` on a case is a real method (PSANTOS working code). | likely (requirement) / verified (method exists) | https://www.mathworks.com/matlabcentral/answers/2054022-hysys-column-stage-error (snippet); PSANTOS | "Would you invoke simulation cases and see if you can proceed?" / `simulation.Activate()` | Cheap to add `case.Activate()` after creation. |
-| COL-columnop-class | ColumnOp | CUSTGUIDE uses `hyCase.Flowsheet.Operations("ColumnOp").Item(0)`; `ColumnOp` is a class/filter name, distinct from TypeName `distillation`. | likely | https://www.researchgate.net/file.PostFileLoader.html?id=5498520fd11b8bcb0f8b4601&assetKey=AS:273753995448332@1442279447334 (snippet) | `Dim hyOp As ColumnOp … Set hyOp = hyCase.Flowsheet.Operations("ColumnOp").Item(0)` | Do not use "ColumnOp" as Add type without testing. |
-| COL-paper-sidedraws | S2S paper limitation | Side draws were left unconnected because templates "encapsulate stage-level connectivity". | verified | PAPER p.17 | "distillation columns in Aspen HYSYS are instantiated using predefined internal templates that encapsulate stage-level connectivity, thereby limiting direct programmatic control over certain side-stream attachments through the Python COM automation interface." | Instruction file should say: connect feed, overhead vapour, distillate, bottoms; leave side draws unconnected with a comment. |
-| COL-paper-consolidation | Tower + condenser + reboiler → one object | Agent A3 consolidates column tower, condenser, reboiler (and reflux drum/pump) into ONE template object; fork emits `integrated_reboiler`, `integrated_condenser`, `integrated_overhead_system`, `skip_unit_ids`. | verified | PAPER p.8; FORK `sketch2sim/coupling_normalizer.py` L92-200 | "the column tower, condenser, and reboiler may be extracted as separate elements, but they must be consolidated into a predefined unit operations template." | Instantiation file must say skipped units get NO `Operations.Add`. |
-| COL-paper-figures | Observed generated columns | Fig 10 Benzene Column: feed in, "Overhead Gas" + "Product Flow" out top, bottoms out; Fig 9 crude column: Off-gas + Waste_Water top, Residue bottom, side-draw labels unconnected. Standard distillation icon with condenser+reboiler. | likely (visual) | (local research copy) fig10-18.png | (figure captions) | — |
-| COL-pysis-warning | pysis wrapper note | pysis-doc (HYSYS wrapper, not PyPI 'pysis'): "in some thermodynamic packages, it seems that the main tower is not available". | uncertain | https://pysis-doc.readthedocs.io/en/latest/pysis.html (snippet) | (as quoted) | — |
-
-## 4. Basis (fluid package, components)
-
-| id | unit / topic | claim | confidence | best source | evidence (verbatim) | conflicts / notes |
-|---|---|---|---|---|---|---|
-| B-ppname-read | PropertyPackageName (read) | `Flowsheet.FluidPackage.PropertyPackageName` is a readable string. | verified | EDGAR; CACHEME | `package_name = HyCase.Flowsheet.FluidPackage.PropertyPackageName` | Setter on `FluidPackages.Add()` object (template) not seen in fetched code; PAPER CS1 ran clean so it works for at least one spelling. |
-| B-ppname-spelling | PropertyPackageName spelling | Setter string in working code is **`"PengRob"`** (section 6); CUSTGUIDE compares the read-back against `"PengRobinson"`; UI label is "Peng-Robinson". | likely | https://www.researchgate.net/file.PostFileLoader.html?id=5498520fd11b8bcb0f8b4601&assetKey=AS:273753995448332@1442279447334 (snippet) | "compares PropertyPackageName against the string \"PengRobinson\", which has no hyphen" | CONFLICT "Peng-Robinson" vs "PengRobinson": recommend set, read back, retry alternate spelling. |
-| B-package-names | Package display names | UI names: Peng-Robinson, PRSV, SRK, Sour PR, Sour SRK, Kabadi-Danner, Lee-Kesler-Plocker, Chien Null, NRTL, Extended NRTL, Glycol Package, Amines Package, Steam Tables, Clean Fuels Package, Modified Antoine, BraunK10, EssoK. | likely | https://users.rowan.edu/~hesketh/0906-316/Handouts/Pages%20from%20SimBasis%20appendix%20A%20property%20packages.pdf (snippet) | "HYSYS currently offers the enhanced Peng-Robinson (PR), and Soave-Redlich-Kwong (SRK) equations of state…" | COM-accepted strings for these unverified. |
-| B-components-kb | Component spellings | Basis agent is constrained to `sketch2sim/RAG/components_list.xlsx` (5731 rows; component_name/full_name/formula): Methane, Ethane, Propane, i-Butane, n-Butane, …, n-C11, H2O (synonym Water), CO2, H2S, Nitrogen, Oxygen, Hydrogen, Ammonia, NaOH, MEAmine, DEAmine, TEGlycol, Methanol, Ethanol, Benzene, Toluene, p-Xylene, Cumene, Air… | verified | FORK `sketch2sim/RAG/components_list.xlsx` | `('Methane', 'C1', 'CH4') … ('H2O', 'Water', 'H2O') … ('MEAmine', 'MEAmine', 'C2H7NO')` | — |
-| B-water-vs-h2o | "Water" vs "H2O" | KB canonical is `H2O`; recipes and basis_agent fallback use `Water`; CS1 ran clean → `Components.Add("Water")` very likely resolves by synonym. | likely | FORK `sketch2sim/RAG/mixture_recipes.txt`, `sketch2sim/agents/basis_agent.py`; PAPER | `- Water (0.90)` / `components.extend(["Water"])` | — |
-| B-bad-component-aborts | Unresolved component | Unresolved component names abort case initialization (RAG ablation → "complete execution failure"). | verified | PAPER Sec. 5.3 | "unresolved material components therefore prevent successful case initialization and terminate simulation." | — |
-| B-components-vba | Components collection | `hyCase.BasisManager.ComponentLists.Item(0).Components`; classes `HYSYS.Components`, `HYSYS.component`. | verified | OSCAR | `Set hyComponents = hyCase.BasisManager.ComponentLists.Item(0).Components` | Template's `fluidpkg.Components.Add(comp)` itself not seen in fetched code (works per PAPER). |
-| B-componentindices | ComponentIndices | `FluidPackage.ComponentIndices(names)` maps names → indices. | verified | PYSYS `flowsheet.py` | `value = self.get_fluid_package().get_func("ComponentIndices").call(names)` | — |
-| B-endbasischange | StartBasisChange/EndBasisChange | Template calls only `hybasis.EndBasisChange()`; whether `StartBasisChange()` is required is unknown (CS1 ran clean → likely not). | uncertain | FORK `sketch2sim/instructions/hysys_template_base.py` | `hybasis.EndBasisChange()` | — |
-
-## 5. Pitfalls, errors, specs, persistence
-
-| id | unit / topic | claim | confidence | best source | evidence (verbatim) | conflicts / notes |
-|---|---|---|---|---|---|---|
-| P-dup-name | Duplicate names | Names must be unique per flowsheet (GUI creates a new object only if the name does not exist). Behaviour of `Add` with a duplicate name (error / auto-suffix / return existing) NOT documented. Spaces, dashes, digits OK. | uncertain (dup behaviour) / likely (uniqueness) | https://www.dypiemr.ac.in/images/Gallery/V8.3GettingStartedWithAspenHYSYSV8.3AQuickTutorial.pdf (snippet) | "HYSYS recognizes that there is no existing stream named MixerOut, so it creates a new stream with this name." | Working names seen: "Low LPG Gas", "ADJ-Sales Gas2", "P-102", "VLV-100", "Tray Sizing-1". Template sanitises only the .hsc filename. |
-| P-no-spec-needed | Specs required to save | None: template has no T/P/flow lines and CS1 "executed without errors and required no fixing-loop intervention"; unspecified streams save fine. | verified | PAPER Sec. 5.2 | "The resulting simulation model, shown in Figure 7, executed without errors and required no fixing-loop intervention." | Simulator = Aspen HYSYS V11 (Table 3). |
-| P-saveas | Persistence / lifecycle | `case.SaveAs(path)`, `Save()`, `Close(saveChanges, path)`, `Activate()`; `app.SimulationCases.Open(path)`, `.Close()`, `app.ActiveDocument`, `app.Quit()`, `Visible`; `case.Title.Value`. | verified | PYSYS `hysys_case.py`; EDGAR; PSANTOS | `self.get_func("SaveAs").call(new_name)` … `self._app.SimulationCases.Close()` … `simulation.Close(SaveChanges=False)` | — |
-| P-member-not-found | COM error texts | `(-2147352573, 'Member not found.')` = misspelled/absent member; `(-2147352562, 'Invalid number of parameters.')` = wrong arg count. | verified | https://github.com/mhammond/pywin32/issues/1896 | `pywintypes.com_error: (-2147352573, 'Member not found.', None, None)` | For HYSYS typically `.FeedStream` used on an op class that lacks it. |
-| P-disp-e-exception | -2147352567 / Type mismatch | `-2147352567` (DISP_E_EXCEPTION) = server-raised wrapper, usually bad args; `-2147352571` Type mismatch = wrong value shape (list vs tuple/SafeArray). Parse `excepinfo[2]`. | likely | https://sourceforge.net/p/pywin32/bugs/659/ (snippet) | "an Aspen Custom Modeler call failed with -2147352567 because a required string argument wasn't being supplied" | — |
-| P-permission-denied | Permission denied writes | Writing column/controller variables from Python can raise 'permission denied' (CHERES-30296) or fail without fix (`Operations.Item("TIC-100").SP.setValue(-32, "C")`, pywin32 #2243). Plain stream `.TemperatureValue` writes are reliable. | likely | https://github.com/mhammond/pywin32/issues/2243 | `simulation.flow_sheet.Operations.Item("TIC-100").SP.setValue(-32, "C")` … "You probably need help from the Aspen_HYSYS team." | — |
-| P-item-missing | Item lookup failures | `Collection.Item(name)` on missing name raises `com_error` or returns None. | verified | PYSYS `base/primitive/dictionary.py` | `except com_error as err: message = f"Key '{key}' cannot be accessed."` … `if func_result is None: message = f"Value at key '{key}' is None."` | — |
-| P-solver-wait | Solver | Variable paths are "sometimes problematic"; wait for solver after input changes; toggle `HyCase.Solver` (`Solver.canSolve` seen in PSANTOS). | verified | https://raw.githubusercontent.com/edgarsmdn/Aspen_HYSYS_Python/main/README.md; PSANTOS | "Since accesing the variables paths in Aspen HYSYS is sometimes problematic." | — |
-| P-value-props | Stream spec write | `stream.TemperatureValue = 33.33`, `stream.MolarFlowValue = 0.0256` (SI); `*Value` = SI shortcut of RealVariable `GetValue(units)/SetValue(value, units)`. | verified | SURADECH | `inlet.TemperatureValue = 33.33` | Readable: VapourFractionValue, PressureValue, MassFlowValue, IdealLiquidVolumeFlowValue, ComponentMolarFractionValue (OSCAR). |
-| P-composition | Composition write | `ComponentMolarFraction.SetValues(values, None)` or whole `.Values` read-modify-write; length must equal component count. | verified | PYSYS `base/primitive/array.py`, `material_stream.py` | `parent._get_attr(attr).SetValues(value, None)` | Wrong length → Type mismatch / DISP_E_EXCEPTION. |
-| P-unit-getvalue | Unit-aware reads | `Temperature.GetValue('C')`, `HeatFlow.GetValue('kW')`, `Duty.GetValue()`. | verified | CACHEME `Test_Column_ObjFnc.py`; SURADECH | `E2101.Duty.GetValue() * 3412.142 / 1000000#` | — |
-| P-setvalue-op | Operation params | `Operations.Item("VLV-1").PercentOpen.SetValue(80)`. | likely | https://medium.com/@toliati.hamid/how-to-connect-aspen-hysys-to-python-6f788e64515e (snippet) | `hy_f.Operations.Item("VLV-1").PercentOpen.SetValue(80)` | — |
-| P-reactor-icon-E | Reactor icon letter | No source maps icon letters. Working hypothesis: C=Conversion, E=Equilibrium, G=Gibbs, Y=Yield Shift → the paper's "E" icon = Equilibrium reactor. | uncertain | https://www.scribd.com/document/711432025/Reactor-processdesign (snippet) | "Equilibrium, Conversion, and Gibbs reactors listed as variants under CSTR" | Only `conversionreactorop` string known; equilibrium string unknown. |
-| P-progid-version | ProgID | Version-specific ProgID `Hysys.Application.V12.1` exists (MATHWORKS); generic `HYSYS.Application` used by all working code. | likely | https://www.mathworks.com/matlabcentral/answers/2054022-hysys-column-stage-error (snippet) | (ProgID mention) | Stick with `HYSYS.Application`. |
-| P-false-lead-pysis | pysis | PyPI `pysis` is a USGS ISIS toolkit; the HYSYS wrapper is `aspen-pysys`. | verified | https://pypi.org/pypi/pysis/json | `"Toolkit for using USGS Isis in Python."` | — |
-| P-paper-agent-roles | Instruction file roles | B2 Instantiation: "Dedicated instruction files guide object creation patterns for each supported unit type"; B3 Configuration: "links material streams to the appropriate inlet and outlet ports"; fixer gets both files + validator report. | verified | PAPER (paper.txt L560-577); FORK `agents/instantiation_agent.py`, `agents/fixer_agent.py` | "Dedicated instruction files guide object creation patterns for each supported unit type, ensuring compliance with the simulator object hierarchy and preventing unsupported operations." | Instantiation file must contain an explicit unit-type → type-string table ("Use only valid HYSYS COM types listed in the instruction block"). |
-| P-blocked-sources | Research gaps | cheresources, vdoc.pub, researchgate, pdfcoffee, scribd, medium, mathworks, readthedocs and codeberg were unreachable from the build environment. The Aspen HYSYS Customization Guide (V7.3) is worth reading on the laptop: https://esupport.aspentech.com/s_Article?key=131879 | other | — | — | — |
+Error texts in the reports are localized. `'发生意外。'` is "Unexpected error" with the HRESULT in the tuple: `-2147467259` E_FAIL, `-2147024809` E_INVALIDARG; `-2147023170` is "RPC call failed"; `'找不到成员。'` is "Member not found"; `'未知名称。'` is "Unknown name".
 
 ---
 
-## Unresolved (to test on the HYSYS V11 laptop)
-1. Type strings for 2-/3-phase Separator, Tank, Expander, Air cooler, Equilibrium/Gibbs/Yield/CSTR/PFR reactors, Absorber family, LLE, Pipe segment ("pipeseg" hint), Relief valve, Ejector, Balance.
-2. Whether `Operations.Add(name, "distillation")` creates the full template (tray section + Condenser + Reboiler + energy streams).
-3. Members that attach column overhead vapour / distillate / bottoms / water draw / side draws and condenser/reboiler duty streams.
-4. Separator/tank/reactor product port names (VapourProduct/LiquidProduct are guesses) and heater/cooler/exchanger port names.
-5. Whether `op.FeedStream = stream` works late-bound (PUTREF) or `Feeds.Add`/`Products.Add` must be used; exact arg type of `Feeds.Add`.
-6. `PropertyPackageName` setter spelling ("Peng-Robinson" vs "PengRobinson") and other package strings.
-7. Duplicate-name behaviour of `Add`; `StartBasisChange` requirement; `AddFeedStream` 3rd argument meaning.
-8. Tray-section name in V11 ("Main Tower" vs "Main TS").
-9. Reactor icon letter mapping (E = Equilibrium?).
+## 1. Creation: `flowsheet.Operations.Add(name, type_string)`
+
+The call shape `Add(name, type)` works for every type string below (DISC: "OK via Add(name, type)" for all categories; no other shape was needed). The returned object's `TypeName` equals the type string. `VisibleTypeName` is the palette name (the 04:32 run printed some of them in Chinese, the 11:17 run and the experiments in English; the English names are given).
+
+| category (`TYPES` key) | type string = TypeName | VisibleTypeName | source |
+|---|---|---|---|
+| pump | `pumpop` | Pump | DISC; REPLAY, INSPECT (cs1 pumps) |
+| compressor | `compressor` | Compressor | DISC; REPLAY cs41 |
+| expander | `expandop` | Expander | DISC; EXP1 step 7 |
+| valve | `valveop` | Valve | DISC; EXP1 step 7; INSPECT cs1 |
+| mixer | `mixerop` | Mixer | DISC; EXP1 step 7; REPLAY cs3 |
+| tee | `teeop` | Tee | DISC |
+| heater | `heaterop` | Heater | DISC; REPLAY cs3, cs41 |
+| cooler | `coolerop` | Cooler | DISC; REPLAY cs41 |
+| heat_exchanger | `heatexop` | Heat Exchanger | DISC; EXP1 step 7 |
+| air_cooler | `aircoolerop` | Air cooler | DISC; EXP1 step 7 |
+| fired_heater | `dynamicfiredheaterop` | Fired Heater | DISC; EXP1 step 6; REPLAY cs3, cs41 |
+| separator | `flashtank` | Separator | DISC; EXP1 step 7; INSPECT cs1, cs2 |
+| separator_3phase | `sep3op` | 3 Phase Separator | EXP2 step C; EXP3 step 6; EXP5 step 4 |
+| tank | `tankop` | Tank | DISC; EXP1 step 7; REPLAY cs3, cs41 |
+| reactor_conversion | `conversionreactorop` | Conversion Reactor | DISC; REPLAY cs41; INSPECT cs2 |
+| reactor_equilibrium | `equilibriumreactorop` | Equilibrium Reactor | DISC; EXP1 step 7 |
+| reactor_gibbs | `gibbsreactorop` | Gibbs Reactor | DISC; EXP1 step 7 |
+| reactor_cstr | `kineticreactorop` | Cont. Stirred Tank Reactor | EXP2 step C |
+| reactor_pfr | `pfreactorop` | Plug Flow Reactor | DISC; EXP2 step C |
+| column_distillation | `distillation` | Distillation | DISC; EXP1 step 1; EXP3; REPLAY |
+| column_absorber | `absorber` | Absorber | DISC; EXP1 step 5; EXP4 step 6 |
+| column_reboiled_absorber | `reboiledabsorber` | Reboiled Absorber | DISC; EXP1 step 5; EXP4 step 6 |
+| column_refluxed_absorber | `refluxedabsorber` | Refluxed Absorber | DISC; EXP1 step 5; EXP4 step 6 |
+| column_3phase | `threephase` | Three Phase Distillation | EXP2 step C; EXP4 step 6; EXP6 step 2 |
+| column_extractor | `liqliqextractor` | Liquid-Liquid Extractor | EXP1 step 5; EXP6 step 3 |
+| (no TYPES category; shortcut columns map to column_distillation) | `shdistop` | Shortcut Column | DISC; EXP1 step 5 (no `ColumnFlowsheet`, see 2.7) |
+| component_splitter | `fractop` | Component Splitter | DISC; EXP1 step 7 |
+| recycle | `recycle` | Recycle | DISC |
+| adjust | `adjust` | Adjust | DISC |
+| set | `setop` | Set | DISC |
+| spreadsheet | `spreadsheetop` | Spreadsheet | DISC |
+| pipe | `pipeseg` | Pipe Segment | DISC; EXP1 step 7 |
+
+Verified type strings the agents do not use: `lngop` (LNG), `balanceop` (Balance), `reliefvalveop` (Relief valve), `streamcutterop` (Stream Cutter) (DISC; EXP1 step 7). `ColumnOp` is accepted too and creates a `columnop` "Column Sub-Flowsheet" whose `ColumnFlowsheet` raises E_FAIL (EXP1 step 5); it is not a usable column.
+
+Type matching is case-insensitive for the strings above (`ColumnOp` -> `columnop`, `TraySection` -> `traysection`; EXP1 step 5, EXP3 step 3), but the class-style spellings `CompressOp` and `HeatExchanger` were never tried and were removed from the template as unneeded (untested).
 
 ---
 
-## 6. Corrections from live-verified HYSYS V14 code (found by the verification pass)
+## 2. Connections per unit family
 
-Two further GitHub projects contain COM code exercised against a running HYSYS; they override several
-"uncertain" rows above and are reflected in the template helpers:
+Assign the stream **object** for a property member (`op.Member = stream`) and call `op.Collection.Add(stream)` for a collection member. The truth about an attachment is `op.AttachedFeeds.Names` / `op.AttachedProducts.Names` (and `stream.UpstreamOpers` / `stream.DownstreamOpers`, INSPECT). Attachments made through COM persist in the saved `.hsc`: INSPECT lists every attachment of the two replayed cases and of cs1/cs2 after reopening. A role whose name ends in `_in` is read back in `AttachedFeeds`, every other role in `AttachedProducts`.
 
-- **AspenHYSYS-MCP-Server** (`src/hysys_mcp/hysys_client.py`, HYSYS V14, pywin32; entries marked "verified
-  on the machine" in the source): type names `coolerop`, `heaterop`, `mixerop`, `teeop`, `pumpop`, `valveop`,
-  `compressor` ("compressop does not exist"), `distillation`, `absorber`, `fractop` (listed there as the
-  shortcut column; aspen-pysys lists it as the component splitter and `shdistop` as the shortcut column),
-  `spreadsheetop`, and **`flashtank` for the 2-phase separator ("separatorop etc. are absent")**. Unverified
-  guesses in the same table: `separator3op`, `expandop`, `heatexop`, `tankop`. Connections are made by
-  assigning the stream **object** to `op.FeedStream` / `op.ProductStream` / `op.EnergyStream`; a name string or
-  `None` raises `DISP_E_TYPEMISMATCH`; `Feeds.Add`, `AttachFeed` and `Ports.ConnectTo` did not exist in that
-  build; there is no disconnect API (`Operations.Remove(name)` deletes). `Operations.Add` is tried as
-  `(name, type)`, `(type, name)` and `(type)` + rename because the argument order differed between
-  environments; `MaterialStreams.Add(name)` falls back to `Add()` + rename through `.name` / `.Name`.
-  Construction is done with `case.Solver.CanSolve = False` and the previous state restored afterwards.
-  The tray section is located by `TypeName` containing `tray` (fallback `Operations.Item("Main TS")`);
-  stage names look like `1_Main TS`; the tray section exposes `AddDrawStream`, called as
-  `(stage, "Liquid"|"Vapour", name)` or `(name, stage, kind)`; `ColumnFlowsheet.Specifications.Add(name, type)`
-  wants internal lowercase spec type names.
-- **AI-HYSYS-Skill** (`scripts/hysys_automation.py`, HYSYS V14/V15): `basis.FluidPackages.Add("Basis-1")`,
-  **`fluid_package.PropertyPackageName = "PengRob"`** (the only property-package setter string seen in working
-  code), components through `basis.ComponentLists.Item("Component List - 1").Components.Add(name)`,
-  `fluid_package.ComponentList = component_list`, `basis.EndBasisChange()` (no `StartBasisChange`),
-  `flowsheet.MaterialStreams.Add(name)`, `operation.Feeds.Add(stream)` (so `Feeds.Add` exists in that
-  environment), `case.Save()`.
+| family (`PORTS` roles) | type strings | inlet members | outlet members | read-back behaviour | source |
+|---|---|---|---|---|---|
+| single-port (`single_in`, `single_out`) | `pumpop`, `compressor`, `expandop`, `valveop`, `heaterop`, `coolerop`, `aircoolerop`, `recycle`, `pipeseg` | `FeedStream` (set) | `ProductStream` (set) | attached, listed in `AttachedFeeds` / `AttachedProducts` | DISC; REPLAY `[verify]` lines; INSPECT |
+| energy (helper `connect_energy`) | `pumpop`, `compressor`, `expandop`, `heaterop`, `coolerop`, `pipeseg`, vessels, reactors | `EnergyStream` (set, a stream from `flowsheet.EnergyStreams.Add(name)`) | — | attached; `EnergyStream` reads back the stream | DISC (`set_energy:EnergyStream` attached on every unit in the list, the CSTR and the PFR included). `valveop`, `aircoolerop`, `recycle` have no `EnergyStream` member (DISC: `set_energy` fails on them); `dynamicfiredheaterop` has none either (DISC member lists) |
+| mixer (`multi_in`, `mixer_out`) | `mixerop` | `Feeds.Add` | `Product` (set) | attached | DISC; REPLAY cs3 (`Mixer: feeds=['Water', 'S102'] products=['Crude-Water Mixture']`); INSPECT cs1 |
+| tee (`tee_in`, `tee_out`) | `teeop` | `FeedStream` (set) | `Products.Add` | attached | DISC. The tee has no `Feed` member; `Feeds` is read-only (DISC member list) |
+| 2-phase vessel (`multi_in`, `vapour_out`, `liquid_out`) | `flashtank`, `tankop` | `Feeds.Add` | `VapourProduct`, `LiquidProduct` (set) | attached | DISC; REPLAY; INSPECT cs1 (`Electrostatic separator: products=['Effluent Water', 'Desalted crude oil']`) |
+| 2-phase vessel, `heavy_liquid_out` | `flashtank`, `tankop` | — | `HeavyLiquidProduct` (set) | **accepted but not attached** (2.4) | DISC ("accepted but NOT attached" on both); EXP1 step 7; INSPECT cs2 |
+| 3-phase separator (`multi_in`, `vapour_out`, `light_liquid_out`, `heavy_liquid_out`) | `sep3op` | `Feeds.Add` | `VapourProduct`, `LiquidProduct` (= light liquid), `HeavyLiquidProduct` (set) | attached | EXP3 step 6; EXP5 step 4 |
+| reactors (`multi_in`, `vapour_out`, `liquid_out`) | `conversionreactorop`, `equilibriumreactorop`, `gibbsreactorop` | `Feeds.Add` | `VapourProduct`, `LiquidProduct` (set) | attached; `HeavyLiquidProduct` raises (not a silent no-op as on the vessels) | DISC; REPLAY cs41 (`R-101.VapourProduct`); INSPECT cs2 (reactor with three feeds, one product) |
+| CSTR (`multi_in`, `vapour_out`, `liquid_out`) | `kineticreactorop` | `Feeds.Add` | `VapourProduct`, `LiquidProduct` (set) | attached; `EnergyStream` attached; `HeavyLiquidProduct` raises | DISC; EXP2 step C (creation) |
+| PFR (`multi_in`, `pfr_out`) | `pfreactorop` | `Feeds.Add` | `Product` (set). `VapourProduct` / `LiquidProduct` do not exist on the PFR | attached (`Feeds.Add`, `Product`, `EnergyStream`) | DISC |
+| heat exchanger (`tube_in`, `tube_out`, `shell_in`, `shell_out`) | `heatexop` | `TubeSideFeed`, `ShellSideFeed` (set) | `TubeSideProduct`, `ShellSideProduct` (set) | attached | DISC |
+| component splitter (`splitter_in`, `splitter_overhead`, `splitter_bottom`) | `fractop` | `Inlets.Add` | `OverheadOutlets.Add`, `BottomOutlets` (set) | attached | DISC |
+| fired heater (`fired_in`, `fired_out`, `flue_gas_out`, `fuel_in`) | `dynamicfiredheaterop` | `RadInlet.Add`, `BurnerFeed` (set) | `RadOutlet.Add`, `CombustionProduct` (set) | attached; see section 4 | EXP1 step 6; EXP3 step 5; EXP5 step 3; REPLAY; INSPECT |
+| columns | `distillation`, `absorber`, `reboiledabsorber`, `refluxedabsorber`, `threephase`, `liqliqextractor` | see section 3 | see section 3 | read back on the column object | EXP3–EXP6; REPLAY; INSPECT |
+| logical | `adjust`, `setop`, `spreadsheetop` | no stream-port members besides the read-only `AttachedFeeds` / `AttachedProducts` / `AttachedLogicalOps` | — | — | DISC member lists |
 
-Consequences in this repository: `TYPES["separator"]` starts with `flashtank`; `add_unit` tries the three
-`Add` call shapes; `add_stream` falls back to `Add()` + rename; the template holds the solver during the
-build; Step 2 sets `property_package = "PengRob"` by default and `ensure_property_package()` re-applies known
-alternative spellings when the read-back disagrees; the tray section is found by `TypeName`; side draws try
-`AddDrawStream` first. The Customization Guide (search excerpts) also shows `hyOpers.Add("Mix-100", "MixerOp")`,
-i.e. class-style spellings are accepted (matching is case-insensitive), `hyMix.Feeds.Add hyFeed1` /
-`hyMix.Products.Add hyProduct1` as the documented multi-port mechanism, and requires
-`StartBasisChange()` / `EndBasisChange()` around basis edits.
+### 2.1 Single-port units
+
+`FeedStream` / `ProductStream` take the stream object and the stream appears in `AttachedFeeds` / `AttachedProducts` at once (DISC; REPLAY `[connect] FEED_PUMP.FeedStream <- CRUDE_OIL` … `[verify] FEED_PUMP: feeds=['CRUDE_OIL'] products=['S101']`). Both members are single-valued (one stream each, DISC member list `get/put`).
+
+### 2.2 Mixer and tee
+
+Mixer: `Feeds.Add(stream)` for every inlet, `Product = stream` (DISC; REPLAY cs3; INSPECT cs1 mixer with three feeds). Tee: `FeedStream = stream`, `Products.Add(stream)` for every outlet (DISC). `Feeds` on the tee and `Products` on the mixer are read-only collections (DISC member lists: `Feeds (get)`, `Products (get)`).
+
+### 2.3 Heat exchanger
+
+`heatexop`: `TubeSideFeed`, `TubeSideProduct`, `ShellSideFeed`, `ShellSideProduct` (set), all attached (DISC). `lngop` exposes no stream-port member in its type information and the four `heatexop` members fail on it (DISC).
+
+### 2.4 Two-phase vessels and the silent `HeavyLiquidProduct`
+
+`flashtank` (Separator) and `tankop` (Tank): `Feeds.Add`, `VapourProduct`, `LiquidProduct`, `EnergyStream` (DISC; REPLAY; INSPECT). Both also expose `HeavyLiquidProduct (get/put)` (DISC member list). On both 2-phase vessels the assignment is **accepted without error and attaches nothing** (DISC: `set:HeavyLiquidProduct` "accepted but NOT attached" on `flashtank` and on `tankop`): after `VapourProduct = 'Sep Vap'`, `LiquidProduct = 'Sep Light'`, `HeavyLiquidProduct = 'Sep Heavy'` the products are still `['Sep Light', 'Sep Vap']` (EXP1 step 7, "flashtank HeavyLiquidProduct silent-noop check"). The cs2 case shows the consequence: the caustic settler was built as `flashtank`, its heavy liquid was assigned to `HeavyLiquidProduct`, and the reopened case lists the settler with the single product `Hydrocarbon phase` while the caustic recycle is attached only at the pump (INSPECT `inspect_report_cs1_cs2.json`). `heavy_liquid_out` is therefore only meaningful on `separator_3phase`; on a 2-phase vessel the helper's read-back reports it as a failure.
+
+### 2.5 Reactors
+
+`conversionreactorop`, `equilibriumreactorop`, `gibbsreactorop`: `Feeds.Add`, `VapourProduct`, `LiquidProduct`, `EnergyStream` (DISC; REPLAY cs41 `R-101.Feeds.Add <- S6`, `R-101.VapourProduct <- S7`; INSPECT cs2 Merox reactor). `kineticreactorop` (CSTR): `Feeds.Add`, `VapourProduct`, `LiquidProduct`, `EnergyStream` attached (DISC; created in EXP2 step C). `pfreactorop` (PFR): `Feeds.Add`, `Product` and `EnergyStream` attached (DISC); its only outlet member is `Product (get/put)`, there is no `VapourProduct` / `LiquidProduct` (DISC member list; setting `Product` untested).
+
+### 2.6 Component splitter
+
+`fractop`: `Inlets.Add`, `OverheadOutlets.Add`, `BottomOutlets = stream` (DISC). `EnergyInlets` is a read-only collection (DISC member list).
+
+### 2.7 Logical operations and the shortcut column
+
+`adjust`, `setop`, `spreadsheetop`: no stream-port members (DISC). `recycle`: `FeedStream` / `ProductStream` attached, no `EnergyStream` (DISC). `shdistop` (Shortcut Column): only the read-only `AttachedFeeds` / `AttachedProducts` / `AttachedLogicalOps` in its type information (DISC) and no `ColumnFlowsheet` (EXP1 step 5): there is no verified way to attach streams to it, so `column_shortcut` is kept in `TYPES` as a plain unit only. `streamcutterop` lists `Inlet` / `Outlet (get/put)` (DISC); untested.
+
+---
+
+## 3. Columns
+
+Applies to `distillation`, `absorber`, `reboiledabsorber`, `refluxedabsorber`, `threephase`, `liqliqextractor`.
+
+### 3.1 Creation recipe
+
+1. `col = flowsheet.Operations.Add(name, type)` creates an **empty shell**: `col.ColumnFlowsheet` raises E_FAIL (EXP1 step 1; EXP3 step 2 with the solver active; LOGS: every column connection of cs3, cs31, cs4 and cs41 failed with this error, which is what their saved cases contain).
+2. `col.LoadColumnTemplate(template)` installs the sub-flowsheet (tray section, condenser, reboiler as applicable). Verified calls: `distillation` with `"distil"`, `"distil.col"`, the full path `C:\Program Files\AspenTech\Aspen HYSYS V11.0\Template\distil.col`, `"Distillation"` and no argument (EXP3 step 1); `absorber` with `"absorber"` (EXP4 step 6); `threephase` with `"3phase"` (EXP4 step 6; EXP6 step 2); `reboiledabsorber`, `refluxedabsorber` and `liqliqextractor` with no argument (EXP4 step 6; EXP6 step 3). The no-argument form loads the type's default template. The template files are `Template\distil.col`, `absorber.col`, `rebabs.col`, `refabs.col`, `3phase.col`, `liqliqex.col` (EXP2 step A2 and EXP4 step 6 directory listings); the helper passes the file stems `distil / absorber / rebabs / refabs / 3phase / liqliqex` (`COLUMN_TEMPLATES`). `rebabs`, `refabs` and `liqliqex` as explicit names were not run (untested; the no-argument form of those three types was). Loading works with the solver held or active (EXP3 steps 1 and 2). `EnterColumnEnvironment()` is not needed: the sub-flowsheet is the same before and after it (EXP3 step 1).
+3. **Never call `CreateColumnTemplate()` first.** It creates an empty sub-flowsheet (`Operations = []`) and makes every later `LoadColumnTemplate(...)` a no-op: 44 names and paths, among them every `.col` file, all returned "OK" and left `[]` (EXP2 steps A1 and A2; EXP1 step 1). Building the sub-flowsheet by hand is a dead end: `cf.Operations.Add("Main TS", "traysection")` works, but no type string creates a condenser or reboiler (`condenser`, `condenserop`, `reboiler`, `reboilerop` fail; EXP3 step 3).
+
+### 3.2 Sub-flowsheet after the template (`col.ColumnFlowsheet.Operations`, name: TypeName)
+
+| template | operations | internal streams | source |
+|---|---|---|---|
+| `distil` | `Main Tower`: `traysection` (`NumberOfStages` 10); `Condenser`: `partialcondenser`; `Reboiler`: `bpreboiler`; `ProductBlock_Ovhd Vapour`, `ProductBlock_Distillate`, `ProductBlock_Btms`: `feederblock` | `Reflux`, `To Condenser`, `Boilup`, `To Reboiler`, `Ovhd Vapour`, `Distillate`, `Btms`; energy `Q-Condenser`, `Q-Reboiler` (listed in `FeedStreams`) | EXP3 steps 1 and 4; REPLAY `[unit] … template [...]` |
+| `absorber` | `Main Tower`; `FeederBlock_Liquid Feed`, `FeederBlock_Vapour Feed`, `ProductBlock_Vapour Product`, `ProductBlock_Liquid Product` | `Liquid Feed`, `Vapour Feed`, `Vapour Product`, `Liquid Product` | EXP4 step 6 |
+| `rebabs` | `Main Tower`; `Reboiler`: `bpreboiler`; `ProductBlock_Ovhd Product`, `ProductBlock_Btms Product` | `Ovhd Product`, `To Reboiler`, `Boilup`, `Btms Product` | EXP4 step 6 |
+| `refabs` | `Condenser`: `partialcondenser`; `Main Tower`; `ProductBlock_Btms Product`, `ProductBlock_Distillate`, `ProductBlock_Vap Product` | `Reflux`, `To Condenser`, `Btms Product`, `Distillate`, `Vap Product` | EXP4 step 6 |
+| `3phase` | `Condenser`: `condenser3chemicalop`; **`Three Phase Column`**: `traysection`; `Reboiler`: `bpreboiler`; `ProductBlock_Vent`, `ProductBlock_Aquaeous Product`, `ProductBlock_Organic Product`, `ProductBlock_Btms Product` | `To Condenser`, `Vent`, `Aquaeous Product`, `Organic Product`, `Organic Reflux`, `To Reboiler`, `Boilup`, `Btms Product`, `Heavy Reflux` | EXP4 step 6; EXP6 step 2 |
+| `liqliqex` | `Main Tower`; `FeederBlock_Liquid 1 In`, `FeederBlock_Liquid 2 In`, `ProductBlock_Light Liquid Product`, `ProductBlock_Heavy Liquid Product` | `Liquid 1 In`, `Liquid 2 In`, `Light Liquid Product`, `Heavy Liquid Product` | EXP6 step 3 |
+
+The tray section is found by `TypeName` containing `tray`, not by name: it is `Main Tower` on five templates and `Three Phase Column` on the 3-phase one (DISC lists the operations of all six loaded templates). DISC exercised `LoadColumnTemplate()`, `AddFeedStream(name, 5, False)`, `AddDrawStream(name, 1, 5, True, False)`, `TopLiquidFeed`, `BtmVapourFeed` and the four product members on every one of the six templates with read-back: all attached. On V11 the name is `Main Tower`, not `Main TS` (that is the name of a hand-added tray section, EXP3 step 3). The `ProductBlock_*` / `FeederBlock_*` entries change as products and feeds are attached (EXP5 step 1).
+
+### 3.3 Feeds
+
+- **Tray feed (default):** `tray.AddFeedStream(name, stage, False)` returns `None`, creates the feed on `stage` and **exports a main-flowsheet material stream with that name**, which is then in `col.AttachedFeeds` and can be connected to an upstream unit (`heater.ProductStream = exported stream`) (EXP4 step 5: feed stages `[('6__Main Tower', 6, ['Fresh Feed'])]`, heater products `['Fresh Feed']`; EXP6 step 2 on the 3-phase template; REPLAY: both column feeds on stage 5). Two tray feeds on different stages work (EXP5 step 2: stages 3 and 7, both in `cf.FeedStreams`). The attachment and the stage persist after save and reopen (EXP4 step 7: `feedstages=[('6__Main Tower', 6, ['Fresh Feed'])]`).
+- **Name collision:** if a main-flowsheet stream of that name already exists, the exported stream is named `name_2` (EXP3 step 4: `AddFeedStream('Feed A', 5, False)` gave `col feeds = ['Feed A_2']`). The helper therefore adds the feed under a temporary name, moves the name and the already-made upstream connections of the placeholder onto the exported stream and removes the placeholder (REPLAY `(re-applied to exported stream)` lines; `MaterialStreams.Remove`, EXP4 step 4). The copy of the stream inside the column sub-flowsheet keeps the temporary name unless it is renamed as well (INSPECT: `__s2s_feed_1` in `col_feeds` / `col_matstreams` of both replayed cases while the main-flowsheet stream carries the agent's name).
+- **`col.TopLiquidFeed = stream` / `col.BtmVapourFeed = stream`** with an existing main-flowsheet stream: the stream is attached to the column (`AttachedFeeds`) but, on the distillation template, to no stage (`feed stages: []`, EXP4 steps 1 and 2, also after reopen, EXP4 step 7). On the absorber template they are the top liquid and bottom vapour feeds, on the extractor template the two liquid feeds (EXP4 step 6: `feeds: ['Abs Liq In', 'Abs Gas In']`; EXP6 step 3: `feeds: ['LLE Light', 'LLE Heavy']`); both persist after reopen (EXP4 step 7; EXP6 step 4). The helper uses them for `position="top"` / `"bottom"` and for a stream that another column already exported.
+- **Negative:** `tray.SpecifyFeedLocation(stream, stage)` fails (E_FAIL) for a main-flowsheet stream in every form tried: the main-flowsheet object, `cf.FeedStreams.Item(name)`, `cf.MaterialStreams.Item(name)` (EXP3 step 4; EXP4 step 1). `cf.FeedStreams.Add(obj)` and `cf.FeedStreams.Add(name)` fail (EXP4 step 2). Moving a `BtmVapourFeed` stream to a stage afterwards fails as well (EXP4 step 2).
+
+### 3.4 Products
+
+- `col.TopVapourProduct`, `col.TopLiquidProduct`, `col.TopWaterProduct`, `col.BtmLiquidProduct = existing main-flowsheet stream`: attached, listed in `col.AttachedProducts` (EXP3 step 4; EXP4 step 3; EXP5 step 1); verified with read-back on all six templates (DISC: all four members on `distillation`, `absorber`, `reboiledabsorber`, `refluxedabsorber`, `threephase` and `liqliqextractor`; EXP6 step 2 on the 3-phase template; EXP6 step 3 on the extractor template; EXP4 step 6 `TopVapourProduct` and `BtmLiquidProduct` on the absorber template). All persist after save and reopen (EXP4 step 7; EXP6 step 4). Each member holds one stream (`get/put`, DISC member list).
+- **`TopWaterProduct` makes the condenser three-phase:** the condenser's TypeName changes from `partialcondenser` to `condenser3op` and `CondenserType` from 0 to 3, also after reopen (EXP5 step 1; EXP6 steps 1 and 4). The helper uses it only for the `water_draw` role, i.e. when the sketch draws a water product.
+- **Accepted but not attached:** on the empty shell (before `LoadColumnTemplate`) all four members are accepted and `AttachedProducts` stays `[]` (EXP1 step 3; EXP2 step A3). This is why the helper reads every column product back.
+- **Negative, condenser-level members:** `Condenser.LiquidStream = stream` and `Reboiler.LiquidStream = stream` are accepted, but the stream appears only in the sub-operation's own `AttachedProducts`, not in `col.AttachedProducts` (EXP5 step 1); `Condenser.VapourStream` raises E_INVALIDARG; `Condenser.VapourProduct` and `Reboiler.LiquidProduct` do not exist (EXP5 step 1). Products are attached on the column object only.
+
+### 3.5 Side draws
+
+- `tray.AddDrawStream(name, phase, stage, True, False)` exports a main-flowsheet product stream, listed in `col.AttachedProducts` (EXP3 step 4; EXP4 step 4). `phase` 1 = liquid draw, 0 = vapour draw, 2 = water draw (EXP4 step 4: `liquid draws ['Kero'] vapour draws ['VapDraw'] water draws ['WaterDraw']`; phase 3 also produced a liquid draw). Name collision gives `name_2` as for feeds (EXP3 step 4: `Kero` -> `Kero_2`); with the main-flowsheet stream removed first, the draw is exported under the wanted name (EXP4 step 4). Draws persist after reopen (EXP4 step 7: seven products including `Kero`, `VapDraw`, `WaterDraw`, `LiqDraw3`). REPLAY cs3 attached `Naphtha`, `Kerosene`, `Diesel`, `AGO` on stages 2, 4, 6, 8 and INSPECT lists all four on the reopened column.
+- **Negative:** `tray.SpecifyDrawLocation(existing stream, stage)` fails (EXP4 step 4).
+
+---
+
+## 4. Fired heater (`dynamicfiredheaterop`)
+
+| member | result | source |
+|---|---|---|
+| `RadInlet.Add(stream)` | **verified** process inlet (radiant tube pass); several inlets accepted, each listed in `RadInlet.Names` and `AttachedFeeds` | EXP3 step 5 (`RadInlet.Names=['Furnace In']`); EXP5 step 3 (second `RadInlet.Add` -> `['In', 'D2']`); REPLAY cs41 (`H-101.RadInlet.Add` three times, `feeds=['Hydrogen', 'Preheated toluene', 'Recycle gas']`); INSPECT (persist) |
+| `RadOutlet.Add(stream)` | **verified** process outlet, in `RadOutlet.Names` and `AttachedProducts` | EXP3 step 5; REPLAY cs3, cs41; INSPECT |
+| `CombustionProduct = stream` | **verified** flue gas, in `AttachedProducts` | EXP1 step 6; EXP3 step 5 |
+| `BurnerFeed = stream` | **verified** fuel, in `AttachedFeeds`; **single-valued**: a second assignment replaces the first (`feeds: ['Fuel']` then `['Air']`) | EXP1 step 6; EXP5 step 3 |
+| `FuelsIn.Add(stream)` | **unreliable**: attached once (EXP1 step 6, where it attached the process stream `Furnace In` as a feed), raised E_FAIL once (EXP5 step 3); not used | EXP1 step 6; EXP5 step 3 |
+| `ConvInlet.Add` / `ConvOutlet.Add` (object or name) | **negative**, E_FAIL: the default heater has no convection-zone pass | EXP3 step 5 |
+| `RadInlet`, `ConvInlet`, `EconInlet`, `RadOutlet`, `ConvOutlet`, `EconOutlet`, `CZTubeFeedStream`, `RZTubeFeedStream` assigned as properties | **negative**: "can not be set" (they are collections / read-only) | EXP1 step 6; EXP2 step B |
+| `FeedStream`, `ProductStream`, `Feeds`, `Products`, `TubeFeeds`, `TubeProducts`, `AttachedFeeds.Add`, `AttachedProducts.Add` | **negative**: do not exist | EXP1 step 6; DISC (no single-port member worked) |
+| `EnergyStream` | not a member | DISC member list |
+
+A fired heater therefore takes every process inlet through `fired_in` (`RadInlet.Add`), every process outlet through `fired_out` (`RadOutlet.Add`), the flue gas through `flue_gas_out` and one burner stream through `fuel_in`. When the sketch draws both fuel and air, the mixing-points normaliser merges them in a burner mixer (`MIXER_TO_<unit>_BURNER`) so that the single `BurnerFeed` port receives one stream; a second burner-side stream that still reaches the heater directly cannot be attached and is recorded with `skip(..., "single burner feed")`.
+
+---
+
+## 5. Two- and three-phase separators
+
+- `sep3op` (3 Phase Separator): `Feeds.Add`, `VapourProduct`, `LiquidProduct`, `HeavyLiquidProduct`, all attached (EXP3 step 6: products `['S3 Light', 'S3 Vap', 'S3 Heavy']`). `LiquidProduct` is the **light** liquid: with `LiquidProduct = Light` and `HeavyLiquidProduct = Heavy`, `LiquidProduct.name` reads back `Light` and the products are `['Light', 'Heavy']` (EXP5 step 4). This is the `PORTS` mapping `light_liquid_out -> LiquidProduct`, `heavy_liquid_out -> HeavyLiquidProduct`.
+- `LightLiquidProduct` exists on neither `sep3op` nor `flashtank` ("can not be set" / unknown name; EXP1 step 7; EXP3 step 6).
+- `flashtank` (2-phase Separator) accepts `HeavyLiquidProduct` silently and attaches nothing (section 2.4). None of the 3-phase spellings listed in section 6 creates a 3-phase vessel; before `sep3op` was found, the template's fallback produced a 2-phase `flashtank` for the cs2 settler (DISC row `separator_3phase`: "template first choice FAILED", type `flashtank`; INSPECT cs2).
+
+---
+
+## 6. Negative results on V11
+
+Type strings that do **not** exist (`Operations.Add` raises E_FAIL):
+
+- 3-phase separator spellings: `separator3op`, `3phaseseparatorop`, `threephaseseparatorop`, `3phaseseparator`, `separator3`, `3phasesep`, `sep3phase`, `threephasesep`, `separator3phase`, `vesselop`, `3-phase separator` (EXP1 step 7; DISC `separator_3phase` tried list); `3phaseflashtank`, `flashtank3`, `flashtank3phase`, `threephaseflashtank`, `3phasetank`, `separatorthreephase`, `3phase`, `separator3phaseop`, `3phasesepop`, `3phaseflash`, `3-phaseseparator`, `three-phaseseparator`, `3 phase separator`, `threephaseseparator`, `3phaseseperator`, `sep3` (EXP2 step C). Only `sep3op` works.
+- Reactors: `cstrop`, `pfrop`, `yieldshiftreactorop`, `cstr`, `pfr`, `gibbs`, `equilibrium` (EXP1 step 7); `cstreactorop`, `cstrreactorop`, `plugflowreactorop`, `tubularreactorop`, `yieldreactorop`, `yieldshiftop` (EXP2 step C); DISC also tried `cstr`, `cstreactorop`, `yieldreactorop`. No yield-shift reactor string was found.
+- Columns: `threephasedistillation` (EXP1 step 5), `3phasedistillation`, `threephasedist` (EXP2 step C), `liquidliquidextractor`, `extractor`, `lleop` (DISC); `reboiledabsorberop`, `refluxedabsorberop` were in the old candidate lists and are superseded by the verified `reboiledabsorber` / `refluxedabsorber` (DISC first choices). `ColumnOp` creates an empty `columnop` sub-flowsheet (section 1); `shdistop` has no `ColumnFlowsheet` (EXP1 step 5).
+- Others: `componentsplitterop` (the component splitter is `fractop`), `ejectorop`, `ejector`, `ejectop`, `tank` (EXP1 step 7; EXP2 step C; DISC), `separator`, `mixer`, `tee`, `cooler`, `heater`, `pump`, `valve`, `compressorop`, `firedheaterop`, `heatexchangerop` (EXP2 step C). `separatorop` is not a V11 type either (the only 2-phase vessel strings that work are `flashtank` and `tankop`). `CompressOp` and `HeatExchanger` were never tried and were removed from the template as unneeded.
+- Sub-flowsheet type strings: `traysectionop`, `tray section`, `condenser`, `condenserop`, `reboiler`, `reboilerop` fail; `traysection` / `TraySection` work (EXP3 step 3).
+
+Members that do not exist or do not attach:
+
+- `LightLiquidProduct` (vessels), `AttachedFeeds.Add`, `AttachedProducts.Add` (every unit), the fired-heater members listed in section 4, `Condenser.VapourProduct`, `Reboiler.LiquidProduct`, `Condenser.VapourStream` (raises), `SpecifyFeedLocation`, `SpecifyDrawLocation`, `ColumnFlowsheet.FeedStreams.Add`.
+- Accepted without attaching: `HeavyLiquidProduct` on `flashtank` and `tankop` (2.4, DISC); the four column product members on a column without a loaded template (3.4); `Condenser.LiquidStream` / `Reboiler.LiquidStream` attach inside the sub-flowsheet only (3.4).
+
+---
+
+## 7. Lifecycle, saving, streams and basis
+
+- **Start-up.** `Dispatch("HYSYS.Application")` and `DispatchEx("HYSYS.Application")` both start a **new** `AspenHysys.exe` (new PID in `tasklist`; 17.8 s for `Dispatch`, EXP5 step 0; `PIDs after DispatchEx … new: [29772]`, EXP1 first lines). Neither attaches to a running instance. `SimulationCases.Add` right after the call worked (EXP5 step 0, "immediate SimulationCases.Add OK").
+- **Start-up / shutdown race.** In the pipeline, `hysys.SimulationCases.Add(case_name)` raised `com_error -2147023170` (RPC call failed) on attempt 2 of every run and on cs3 attempt 4 (LOGS `logs/cs41/executor_run_20261022_052103.log`, `logs/cs4/executor_run_20261022_051241.log`, `logs/cs31/executor_run_20261022_074224.log`, `logs/cs3/executor_run_20261022_070520.log` and `_070743.log`); each of those attempts started a new instance while the previous attempt's instance was still alive. The failures stopped in every run once a sleep-and-retry loop around `Add` was in place. Reproduced during the investigation of the change plan (not in the saved step logs): creating a case while the previous instance is still exiting fails with E_FAIL, and starting two instances at the same moment fails with a server fault. Waiting until the previous process has left `tasklist`, then creating the instance and the case, works on the first try (EXP5 step 0: `after Quit: waited 14s; extra PIDs still alive: []` … `SimulationCases.Add OK on try 1`). The template's Step 1 therefore uses `DispatchEx`, prints the PID it created and retries `SimulationCases.Add` with 5 s sleeps; the executor waits for the previous attempt's instance before starting the next one.
+- **Quit.** `hysys.Quit()` returns immediately (0.0 s) and the process exits within about 15 s, also for a visible instance with an unsaved, modified case; no dialog appears (QUIT: `Quit() returned after 0.0s`, `still alive after Quit: []`; EXP5 step 0; EXP6 step 4 `instance 1 gone: True`). Instances that no script quits never exit on their own (EXP1: seven `AspenHysys.exe` left by the morning's pipeline runs were still alive at 09:25).
+- **Save.** `case.SaveAs(path)` works with the solver held (`case.Solver.CanSolve = False`), after releasing it (`CanSolve = True`, `Solver.IsSolving` False), and a second time to the same path; `case.Save()` works (EXP1 step 8). Saved cases reopen with every attachment through `hysys.SimulationCases.Open(path)` (EXP4 step 7; EXP6 step 4; INSPECT). `SaveAs(path, True)` is a `TypeError` ("takes from 1 to 2 positional arguments but 3 were given", LOGS cs31). In late cs3/cs31 attempts `SaveAs(path)` raised E_INVALIDARG (`logs/cs3/executor_run_20261022_072014.log`; `logs/cs31/executor_run_20261022_081400.log` … `_082828.log`) after fixer-edited helper code, with older instances holding the same path; this was not reproduced in isolation (EXP1 step 8 saved with the leftover instances alive). The template saves to a per-attempt path and retries once with the solver held.
+- **Solver.** `case.Solver.CanSolve = False` holds the solver while the flowsheet is built and `True` releases it; `case.Solver.IsSolving` is readable (EXP1 step 8; REPLAY `[solver]` lines). Column templates load and streams attach in both states (EXP3 steps 1 and 2).
+- **Streams.** `flowsheet.MaterialStreams.Add(name)` returns the stream; `MaterialStreams.Item(name)`, `MaterialStreams.Remove(name)` (EXP4 step 4), `MaterialStreams.Names`; renaming through `stream.name = ...` (REPLAY / INSPECT: the streams exported by the column carry the agents' names after the helper's rename); `flowsheet.EnergyStreams.Add(name)` (DISC energy probes). `AttachedFeeds.Names`, `AttachedProducts.Names`, `UpstreamOpers`, `DownstreamOpers` are the read-back truth (INSPECT).
+- **Basis.** `case.BasisManager.StartBasisChange()` / `EndBasisChange()`, `FluidPackages.Add()`, `fluidpkg.PropertyPackageName = "PengRob"` reads back `'Peng-Robinson'` (DISC `property_package`; REPLAY line 1), `fluidpkg.Components.Add("Benzene")`, `("Toluene")`, `("Hydrogen")`, `("Methane")`, `("H2O")`, `("Ethane")` (DISC; EXP scripts). `case.Visible = True` and `hysys.Visible` are settable (QUIT; template Step 1).

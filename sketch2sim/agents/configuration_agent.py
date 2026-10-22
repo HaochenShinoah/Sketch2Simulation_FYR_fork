@@ -103,7 +103,11 @@ def _build_system_prompt() -> str:
         "2. Do not create any connection that is not explicitly listed in the JSON.\n"
         "3. Do not skip any connection that is explicitly listed in the JSON, except where the "
         "instruction block tells you to record it with skip(...) because the unit has no free port.\n"
-        "4. Do not create new streams or new units.\n\n"
+        "4. Do not create new streams or new units. The one exception is the energy "
+        "stream of a reactor: after the streams of every unit created with "
+        'TYPES["reactor_..."] add exactly one line connect_energy("<unit_id>") '
+        "(instruction block, section 4.4); such lines are not counted as stream "
+        "connections.\n\n"
         "Implementation:\n"
         "- Use the existing unit and stream objects already created in the Instantiation script.\n"
         "- Match objects using their IDs.\n"
@@ -147,6 +151,59 @@ _CONNECT_CALL_RE = re.compile(
     r"(?:connect|connect_column_feed|connect_column_product|skip)\(\s*"
     r'"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"'
 )
+_ROLE_RE = re.compile(
+    r'(connect|connect_column_product)\(\s*"(?:[^"\\]|\\.)*"\s*,\s*"(?:[^"\\]|\\.)*"'
+    r'\s*,\s*"([^"]*)"'
+)
+# Roles of the template's PORTS dict (connect) and the column product roles
+# (connect_column_product); tests/test_instruction_files.py keeps them in sync.
+CONNECT_ROLES = frozenset(
+    {
+        "single_in",
+        "single_out",
+        "multi_in",
+        "mixer_out",
+        "tee_in",
+        "tee_out",
+        "vapour_out",
+        "liquid_out",
+        "light_liquid_out",
+        "heavy_liquid_out",
+        "pfr_out",
+        "tube_in",
+        "tube_out",
+        "shell_in",
+        "shell_out",
+        "splitter_in",
+        "splitter_overhead",
+        "splitter_bottom",
+        "fired_in",
+        "fired_out",
+        "flue_gas_out",
+        "fuel_in",
+    }
+)
+COLUMN_PRODUCT_ROLES = frozenset(
+    {"overhead_vapour", "distillate", "water_draw", "bottoms", "side_draw"}
+)
+
+
+def strip_comments(code: str) -> str:
+    """Drop comments so a commented-out call is not mistaken for a connection."""
+    lines = []
+    for line in code.splitlines():
+        in_string = None
+        for index, char in enumerate(line):
+            if in_string:
+                if char == in_string:
+                    in_string = None
+            elif char in ("'", '"'):
+                in_string = char
+            elif char == "#":
+                line = line[:index]
+                break
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _validate_step_6(step_6_code: str, unit_view_text: str) -> None:
@@ -165,10 +222,16 @@ def _validate_step_6(step_6_code: str, unit_view_text: str) -> None:
         return
     if not _STEP6_HEADER_RE.search(step_6_code):
         raise ValueError("Configuration output does not start with the Step 6 marker.")
-    found = _CONNECT_CALL_RE.findall(step_6_code)
+    code = strip_comments(step_6_code)
+    found = _CONNECT_CALL_RE.findall(code)
     missing = [pair for pair in expected if pair not in found]
     extra = [pair for pair in found if pair not in expected]
     duplicates = [pair for pair in set(found) if found.count(pair) > 1]
+    bad_roles = [
+        f"{call}(..., {role!r})"
+        for call, role in _ROLE_RE.findall(code)
+        if role not in (CONNECT_ROLES if call == "connect" else COLUMN_PRODUCT_ROLES)
+    ]
     problems = []
     if missing:
         problems.append(f"streams never connected (unit, stream): {missing}")
@@ -176,6 +239,8 @@ def _validate_step_6(step_6_code: str, unit_view_text: str) -> None:
         problems.append(f"connections not in units_unit_view: {extra}")
     if duplicates:
         problems.append(f"connected more than once: {duplicates}")
+    if bad_roles:
+        problems.append(f"unknown roles: {bad_roles}")
     if problems:
         raise ValueError("Configuration output is incomplete: " + "; ".join(problems))
 

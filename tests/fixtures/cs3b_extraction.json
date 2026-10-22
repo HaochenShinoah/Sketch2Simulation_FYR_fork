@@ -1,0 +1,237 @@
+{
+  "units": [
+    {
+      "id": "Crude oil storage tank",
+      "name": "Crude oil storage tank",
+      "tags": []
+    },
+    {
+      "id": "Feed pump",
+      "name": "Feed pump",
+      "tags": []
+    },
+    {
+      "id": "Pre-Heat Train 1",
+      "name": "Pre-Heat Train 1",
+      "tags": []
+    },
+    {
+      "id": "Mixer",
+      "name": "Mixer",
+      "tags": []
+    },
+    {
+      "id": "Desalter",
+      "name": "Desalter",
+      "tags": []
+    },
+    {
+      "id": "Pre-Heat Train 2",
+      "name": "Pre-Heat Train 2",
+      "tags": []
+    },
+    {
+      "id": "Fired heater",
+      "name": "Fired heater",
+      "tags": []
+    },
+    {
+      "id": "Atmospheric distillation column",
+      "name": "Atmospheric distillation column",
+      "tags": []
+    },
+    {
+      "id": "Condenser",
+      "name": "Condenser",
+      "tags": []
+    },
+    {
+      "id": "Reboiler",
+      "name": "Reboiler",
+      "tags": []
+    }
+  ],
+  "feed_streams": [
+    {
+      "id": "Crude oil",
+      "to_unit": "Crude oil storage tank",
+      "name": "Crude oil",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Water",
+      "to_unit": "Mixer",
+      "name": "Water",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Fuel gas",
+      "to_unit": "Fired heater",
+      "name": "Fuel gas",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Air 1800",
+      "to_unit": "Fired heater",
+      "name": "Air 1800",
+      "connect_point": "bottom",
+      "stage": null
+    },
+    {
+      "id": "Main steam",
+      "to_unit": "Atmospheric distillation column",
+      "name": "Main steam",
+      "connect_point": "side",
+      "stage": 12
+    }
+  ],
+  "intermediate_streams": [
+    {
+      "id": "S101",
+      "from_unit": "Crude oil storage tank",
+      "to_unit": "Feed pump",
+      "name": "Crude oil",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "S102",
+      "from_unit": "Feed pump",
+      "to_unit": "Pre-Heat Train 1",
+      "name": "Pumped crude oil",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "S103",
+      "from_unit": "Pre-Heat Train 1",
+      "to_unit": "Mixer",
+      "name": "Preheated crude oil",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "S104",
+      "from_unit": "Mixer",
+      "to_unit": "Desalter",
+      "name": "Crude and water",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "S105",
+      "from_unit": "Desalter",
+      "to_unit": "Pre-Heat Train 2",
+      "name": "Desalted crude oil",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "S106",
+      "from_unit": "Pre-Heat Train 2",
+      "to_unit": "Fired heater",
+      "name": "Preheated desalted crude",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "S107",
+      "from_unit": "Fired heater",
+      "to_unit": "Atmospheric distillation column",
+      "name": "Heated crude oil",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Overhead vapour",
+      "from_unit": "Atmospheric distillation column",
+      "to_unit": "Condenser",
+      "name": "Overhead vapour",
+      "connect_point": "overhead",
+      "stage": null
+    },
+    {
+      "id": "Bottoms residue",
+      "from_unit": "Atmospheric distillation column",
+      "to_unit": "Reboiler",
+      "name": "Bottoms residue",
+      "connect_point": "bottom",
+      "stage": null
+    }
+  ],
+  "product_streams": [
+    {
+      "id": "Salt water",
+      "from_unit": "Desalter",
+      "name": "Salt water",
+      "connect_point": "overhead",
+      "stage": null
+    },
+    {
+      "id": "Flue gas",
+      "from_unit": "Fired heater",
+      "name": "Flue gas",
+      "connect_point": "overhead",
+      "stage": null
+    },
+    {
+      "id": "Off-gas",
+      "from_unit": "Condenser",
+      "name": "Off-gas",
+      "connect_point": "overhead",
+      "stage": null
+    },
+    {
+      "id": "Waste water",
+      "from_unit": "Condenser",
+      "name": "Waste water",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Naphtha",
+      "from_unit": "Condenser",
+      "name": "Naphtha",
+      "connect_point": "bottom",
+      "stage": null
+    },
+    {
+      "id": "Reflux",
+      "from_unit": "Atmospheric distillation column",
+      "name": "Reflux",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Kero",
+      "from_unit": "Atmospheric distillation column",
+      "name": "Kero",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Diesel",
+      "from_unit": "Atmospheric distillation column",
+      "name": "Diesel",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "AGO",
+      "from_unit": "Atmospheric distillation column",
+      "name": "AGO",
+      "connect_point": "side",
+      "stage": null
+    },
+    {
+      "id": "Residue",
+      "from_unit": "Reboiler",
+      "name": "Residue",
+      "connect_point": "side",
+      "stage": null
+    }
+  ]
+}

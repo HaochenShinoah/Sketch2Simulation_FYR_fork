@@ -95,6 +95,37 @@ def get_latest_executor_log_tail(log_dir: str, tail_lines: int) -> tuple[str, st
     return str(latest), tail
 
 
+_KEEP_PREFIXES = (
+    "[summary]",
+    "[verify]",
+    "[hysys]",
+    "[save]",
+    "[solver]",
+    "[unit]",
+    "[connect] WARNING",
+    "[connect] NOTE",
+    "  - ",
+    "Traceback",
+    "Exit Code",
+    "=== ",
+    "Simulation saved at",
+)
+
+
+def compact_executor_log(text: str, keep_last: int = 40) -> str:
+    """Keep the lines the Fixer needs: summary, failures, notes, errors, last lines.
+
+    The per-stream creation and per-connection success chatter is dropped so the
+    packet stays small; stderr and the exit code are always kept.
+    """
+    lines = text.splitlines()
+    if len(lines) <= keep_last:
+        return text
+    head = [line for line in lines[:-keep_last] if line.startswith(_KEEP_PREFIXES)]
+    tail = lines[-keep_last:]
+    return "\n".join(head + ["..."] + tail)
+
+
 def build_runtime_issue_packet(exec_result: dict, latest_exec_file_text: str) -> str:
     summary = (exec_result.get("result_summary", "") or "").strip()
     stderr = (exec_result.get("stderr", "") or "").strip()
@@ -105,7 +136,10 @@ def build_runtime_issue_packet(exec_result: dict, latest_exec_file_text: str) ->
     if stderr:
         parts.append("=== EXECUTOR STDERR ===\n" + stderr)
     if latest_exec_file_text:
-        parts.append("=== LATEST EXECUTOR RUN LOG (TAIL) ===\n" + latest_exec_file_text)
+        parts.append(
+            "=== LATEST EXECUTOR RUN LOG (TAIL) ===\n"
+            + compact_executor_log(latest_exec_file_text)
+        )
 
     return "\n\n".join(parts).strip()
 
@@ -114,8 +148,11 @@ def is_success(summary: str) -> bool:
     return "Status: Success" in (summary or "")
 
 
-def finish_success(log_dir: str, output_dir: str):
+def finish_success(log_dir: str, output_dir: str, kept: dict | None = None):
     print("\nFinal execution succeeded.")
+    if kept:
+        for label, path in kept.items():
+            print(f"{label}: {path}")
     print("\nPipeline complete.")
     print("Logs stored in:", log_dir)
     print("Outputs in:", output_dir)

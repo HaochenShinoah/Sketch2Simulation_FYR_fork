@@ -46,6 +46,22 @@ Optional (misc)
     S2S_EXECUTOR_TIMEOUT        HYSYS script timeout in seconds (600).
     S2S_PYTHON_EXECUTABLE       Interpreter used to run the generated script
                                 (default: the current interpreter).
+
+Read by the generated script (set by the executor or by you)
+    S2S_HSC_DIR                 Folder where the .hsc and the topology report
+                                are written (the executor sets the output dir).
+    S2S_HSC_SUFFIX              Suffix of the case file name; the executor
+                                sets "_attemptN" so every attempt keeps its case.
+    S2S_HYSYS_KEEP_OPEN         "0" (default): every script quits the HYSYS
+                                instance it started (open the saved .hsc to
+                                look at the flowsheet). "1" leaves the
+                                instance of a successful script open; close it
+                                before the next run, or the next script
+                                attaches to it instead of starting its own.
+    S2S_ATTEMPT                 Attempt number, set by the executor for the
+                                "[hysys] attempt N" log line.
+    S2S_STRICT_CONNECTIONS      "1" (default): a connection that could not be
+                                made exits with code 2; "0" only reports it.
 """
 
 from __future__ import annotations

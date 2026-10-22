@@ -25,6 +25,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from sketch2sim.utils.normalization_utils import (
+    is_fired_heater,
+    is_flue_gas_stream,
+    mark_fired_heaters,
+)
+
 _SINGLE_OUTLET_HINTS: set[str] = {
     "pump",
     "compressor",
@@ -72,7 +78,7 @@ def _kind(unit: dict[str, Any]) -> str | None:
         return None
     # A fired heater has a flue-gas outlet besides its process outlet: treat it
     # like a vessel (one tee per port) rather than as a single-outlet unit.
-    if "fired" in text or "furnace" in text:
+    if is_fired_heater(unit):
         return "vessel"
     if any(hint in text for hint in _SINGLE_OUTLET_HINTS):
         return "single"
@@ -103,6 +109,7 @@ def normalize_splitting_points(extraction: dict[str, Any] | None) -> dict[str, A
     )
     product_streams: list[dict[str, Any]] = extraction.get("product_streams") or []
 
+    mark_fired_heaters(extraction)
     existing_unit_ids = {u.get("id") for u in units if isinstance(u, dict)}
     existing_stream_ids = {
         s.get("id")
@@ -133,6 +140,10 @@ def normalize_splitting_points(extraction: dict[str, Any] | None) -> dict[str, A
             continue
 
         leaving = [s for s in outgoing if s.get("from_unit") == unit_id]
+        if is_fired_heater(unit):
+            # The flue gas has its own port on a fired heater (CombustionProduct);
+            # it never shares a tee with the process outlet.
+            leaving = [s for s in leaving if not is_flue_gas_stream(s)]
         if kind == "single":
             groups = {None: leaving} if len(leaving) > 1 else {}
         else:

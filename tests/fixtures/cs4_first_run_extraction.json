@@ -1,0 +1,46 @@
+{
+  "units": [
+    {"id": "V-101", "name": "Toluene Storage Drum", "tags": ["V-101"]},
+    {"id": "P-101A/B", "name": "Toluene Feed Pumps", "tags": ["P-101A/B"]},
+    {"id": "E-101", "name": "Feed Preheater", "tags": ["E-101"]},
+    {"id": "H-101", "name": "Feed Heater", "tags": ["H-101"]},
+    {"id": "R-101", "name": "Reactor", "tags": ["R-101"]},
+    {"id": "C-101A/B", "name": "Recycle Gas Compressor", "tags": ["C-101A/B"]},
+    {"id": "E-102", "name": "Reactor Effluent Cooler", "tags": ["E-102"]},
+    {"id": "V-102", "name": "High-Pressure Phase Separator", "tags": ["V-102"]},
+    {"id": "V-103", "name": "Low-Pressure Phase Separator", "tags": ["V-103"]},
+    {"id": "E-103", "name": "Feed Heater", "tags": ["E-103"]},
+    {"id": "E-106", "name": "Benzene Reboiler", "tags": ["E-106"]},
+    {"id": "T-101", "name": "Benzene Column", "tags": ["T-101"]},
+    {"id": "E-104", "name": "Benzene Condenser", "tags": ["E-104"]},
+    {"id": "V-104", "name": "Reflux Drum", "tags": ["V-104"]},
+    {"id": "P-102A/B", "name": "Reflux Pumps", "tags": ["P-102A/B"]},
+    {"id": "E-105", "name": "Product Cooler", "tags": ["E-105"]}
+  ],
+  "feed_streams": [
+    {"id": "S1", "to_unit": "V-101", "name": "Toluene", "connect_point": "side"},
+    {"id": "S3", "to_unit": "H-101", "name": "Hydrogen", "connect_point": "side"}
+  ],
+  "intermediate_streams": [
+    {"id": "S2", "from_unit": "P-101A/B", "to_unit": "E-101", "name": "Toluene feed", "connect_point": "side"},
+    {"id": "S4", "from_unit": "E-101", "to_unit": "H-101", "name": "Preheated toluene feed", "connect_point": "side"},
+    {"id": "S5", "from_unit": "C-101A/B", "to_unit": "H-101", "name": "Recycle gas", "connect_point": "side"},
+    {"id": "S6", "from_unit": "H-101", "to_unit": "R-101", "name": "Heated reactor feed", "connect_point": "side"},
+    {"id": "S7", "from_unit": "R-101", "to_unit": "E-102", "name": "Reactor effluent", "connect_point": "bottom"},
+    {"id": "S8", "from_unit": "V-102", "to_unit": "C-101A/B", "name": "Recycle gas", "connect_point": "overhead"},
+    {"id": "S9", "from_unit": "E-102", "to_unit": "V-102", "name": "Cooled reactor effluent", "connect_point": "side"},
+    {"id": "S10", "from_unit": "V-103", "to_unit": "E-103", "name": "Low-pressure separator liquid", "connect_point": "bottom"},
+    {"id": "S11", "from_unit": "T-101", "to_unit": "E-106", "name": "Column bottoms to reboiler", "connect_point": "bottom"},
+    {"id": "S12", "from_unit": "P-102A/B", "to_unit": "T-101", "name": "Reflux", "connect_point": "overhead"},
+    {"id": "S13", "from_unit": "T-101", "to_unit": "E-104", "name": "Benzene column overhead", "connect_point": "overhead"},
+    {"id": "S14", "from_unit": "V-104", "to_unit": "P-102A/B", "name": "Benzene condensate", "connect_point": "bottom"},
+    {"id": "S18", "from_unit": "E-103", "to_unit": "T-101", "name": "Heated column feed", "connect_point": "side"},
+    {"id": "S20", "from_unit": "P-102A/B", "to_unit": "E-105", "name": "Net benzene distillate", "connect_point": "side"}
+  ],
+  "product_streams": [
+    {"id": "S15", "from_unit": "E-105", "name": "Benzene", "connect_point": "side"},
+    {"id": "S16", "from_unit": "V-102", "name": "Fuel Gas", "connect_point": "overhead"},
+    {"id": "S17", "from_unit": "V-103", "name": "Fuel gas", "connect_point": "overhead"},
+    {"id": "S19", "from_unit": "V-104", "name": "Fuel gas vent", "connect_point": "overhead"}
+  ]
+}

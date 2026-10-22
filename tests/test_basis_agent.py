@@ -31,7 +31,9 @@ def _assert_well_formed(result: str) -> None:
     assert 'property_package = "PengRob"' in result
     assert "FILL_CASE_NAME" not in result
     # the template's own helpers and tail survive untouched
-    assert "def add_unit(" in result and "finish_connections()" in result
+    assert "def add_unit(" in result and "finish_connections(" in result
+    # Step 1 is template-owned: the launch/retry logic is present, the name filled
+    assert "DispatchEx(" in result and "SimulationCases.Add(case_name)" in result
     assert result.count("flowsheet = case.Flowsheet") == 1
 
 
