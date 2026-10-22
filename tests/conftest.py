@@ -60,13 +60,13 @@ def fake_basis_output(user_prompt: str) -> str:
         "hybasis.EndBasisChange()\n"
         "flowsheet = case.Flowsheet\n\n"
     )
+    # The real model is told to stop right before the "# === Step 3b" marker,
+    # so the fake answers with Steps 1-3 only (no helper block, no Step 4).
+    code = code[: code.index("# === Step 3b")]
     code = re.sub(
-        r"(?s)# === Step 3: Add Components ===.*?(?=# === Step 4:)",
-        lambda _: step3,
-        code,
-        count=1,
+        r"(?s)# === Step 3: Add Components ===.*\Z", lambda _: step3, code, count=1
     )
-    return "```python\n" + code + "\n```"
+    return "```python\n" + code.rstrip() + "\n```"
 
 
 _CATEGORY_BY_TAG = [

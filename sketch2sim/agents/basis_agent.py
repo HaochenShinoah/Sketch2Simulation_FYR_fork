@@ -118,18 +118,41 @@ def _build_knowledge_base(materials: list[str]) -> str:
     return "\n".join(chunks).strip()
 
 
+_STEP3_TAIL = ("hybasis.EndBasisChange()", "flowsheet = case.Flowsheet")
+
+
+def _complete_step3(step_block: str) -> str:
+    """Make sure the model's Step 3 still ends the way the template's does.
+
+    The two closing lines are fixed template code that the rest of the script
+    relies on (``flowsheet`` is used by every helper); a model that stops at the
+    component loop must not break the build.
+    """
+    block = step_block.rstrip()
+    if "flowsheet = case.Flowsheet" in block:
+        return block
+    if "EndBasisChange()" not in block:
+        block += "\n" + _STEP3_TAIL[0]
+    return block + "\n" + _STEP3_TAIL[1]
+
+
 def _apply_safety_belt(template: str, llm_code: str) -> str:
     """Splice the model's Steps 1-3 into the template, keeping everything else.
 
-    Only the region from "Step 1" up to the helper block (or Step 4 when the
-    model dropped the helpers) is taken from the model output; the template
-    keeps its own helper functions and Steps 4-7.
+    The model is asked to answer with Steps 1-3 only, so its text normally ends
+    after Step 3 (no further marker). If it echoed the helper block or Step 4
+    as well, only the region from "Step 1" up to that marker is taken; the
+    template keeps its own helper functions and Steps 4-7 either way.
     """
-    match = re.search(rf"(?s)(# === Step 1:.*?)(?={_END_OF_BASIS_RE})", llm_code)
+    match = re.search(rf"(?s)(# === Step 1:.*?)(?={_END_OF_BASIS_RE}|\Z)", llm_code)
     if not match:
-        raise ValueError("Could not extract Steps 1–3 from Basis output.")
+        preview = llm_code.strip().replace("\n", " ")[:300]
+        raise ValueError(
+            "Could not extract Steps 1-3 from Basis output: no '# === Step 1:' "
+            f"marker found. Output started with: {preview!r}"
+        )
 
-    step_block = match.group(1).rstrip()
+    step_block = _complete_step3(match.group(1))
     pattern = rf"(?s)# === Step 1:.*?(?={_END_OF_BASIS_RE})"
 
     if not re.search(pattern, template):
