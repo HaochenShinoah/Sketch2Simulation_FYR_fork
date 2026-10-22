@@ -169,6 +169,13 @@ def test_json_schema_downgrades_to_json_object(monkeypatch):
     )
     assert result.text == "ok"
     assert result.stripped_params == ["text:json_schema->json_object"]
+    downgraded = [
+        c
+        for c in recorder.calls
+        if (c.get("text") or {}).get("format", {}).get("type") == "json_object"
+    ]
+    assert downgraded, "the retry must use json_object"
+    assert downgraded[-1]["input"][0]["content"][0]["text"].endswith(llm.JSON_MODE_HINT)
 
 
 def test_chat_mode_request_shape(monkeypatch):
@@ -180,7 +187,11 @@ def test_chat_mode_request_shape(monkeypatch):
     assert text == "ok"
     first = recorder.calls[0]
     assert first["messages"][0] == {"role": "system", "content": "SYSTEM"}
-    assert first["messages"][1] == {"role": "user", "content": "USER"}
+    # neither SYSTEM nor USER mentions json, so the json_object hint is appended
+    assert first["messages"][1] == {
+        "role": "user",
+        "content": f"USER\n\n{llm.JSON_MODE_HINT}",
+    }
     assert first["max_completion_tokens"] == 50
     assert first["seed"] == config.LLM_SEED
     assert first["response_format"] == {"type": "json_object"}
@@ -345,3 +356,75 @@ def test_seed_env_parsing(monkeypatch):
     assert config._env_optional_int("S2S_TEST_SEED", 42) is None
     monkeypatch.setenv("S2S_TEST_SEED", "off")
     assert config._env_optional_int("S2S_TEST_SEED", 42) is None
+
+
+def test_json_mode_adds_json_word_to_responses_input(monkeypatch):
+    """The Responses API checks the input messages only, not `instructions`."""
+    recorder = _Recorder({})
+    monkeypatch.setattr(llm, "get_client", lambda: _fake_client(recorder))
+    monkeypatch.setattr(config, "OPENAI_API_MODE", "responses")
+
+    # the system prompt mentions JSON, the user prompt (a JSON document) does not
+    llm.chat(
+        "gpt-4.1",
+        "Return one JSON object with exact keys.",
+        json.dumps({"description": "A pump feeds a separator."}),
+        json_mode=True,
+    )
+    call = recorder.calls[-1]
+    assert call["text"] == {"format": {"type": "json_object"}}
+    assert call["instructions"] == "Return one JSON object with exact keys."
+    assert call["input"][0]["content"][0]["text"].endswith("\n\n" + llm.JSON_MODE_HINT)
+
+    # a user prompt that already says json is left alone
+    llm.chat("gpt-4.1", "SYSTEM", "Answer as JSON: is water a liquid?", json_mode=True)
+    assert recorder.calls[-1]["input"][0]["content"][0]["text"] == (
+        "Answer as JSON: is water a liquid?"
+    )
+
+    # json_schema requests are not touched (the API does not require the word)
+    llm.chat(
+        "gpt-4.1",
+        "SYSTEM",
+        "USER",
+        json_schema={"type": "object", "properties": {}, "required": []},
+    )
+    assert recorder.calls[-1]["input"][0]["content"][0]["text"] == "USER"
+    # plain text requests are not touched either
+    llm.chat("gpt-4.1", "SYSTEM", "USER")
+    assert recorder.calls[-1]["input"][0]["content"][0]["text"] == "USER"
+
+
+def test_ensure_json_word_with_images_and_chat_parts():
+    responses_kwargs = {
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "data:..."},
+                    {"type": "input_text", "text": "Describe the sketch."},
+                ],
+            }
+        ]
+    }
+    assert llm.ensure_json_word(responses_kwargs) is True
+    assert responses_kwargs["input"][0]["content"][1]["text"].endswith(
+        llm.JSON_MODE_HINT
+    )
+    assert llm.ensure_json_word(responses_kwargs) is False  # idempotent
+
+    chat_kwargs = {
+        "messages": [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+        ]
+    }
+    assert llm.ensure_json_word(chat_kwargs) is True
+    assert (
+        chat_kwargs["messages"][1]["content"][0]["text"]
+        == f"Hi\n\n{llm.JSON_MODE_HINT}"
+    )
+    assert (
+        llm.ensure_json_word({"messages": [{"role": "system", "content": "json"}]})
+        is False
+    )
