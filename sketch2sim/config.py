@@ -37,7 +37,10 @@ Optional (decoding)
     S2S_LLM_SEED                Default 42 (Chat Completions only); "" or
                                 "off" disables it.
     S2S_LLM_REASONING_EFFORT    Effort sent to reasoning-capable models
-                                (default "medium"; set "" to send nothing).
+                                (default "max", the highest level the API
+                                offers; a model that rejects a level is
+                                retried one level lower, see llm.py; set ""
+                                to send nothing).
     S2S_*_MAX_OUTPUT_TOKENS     Per-agent output caps (see below).
 
 Optional (misc)
@@ -159,18 +162,17 @@ def _env_optional_float(name: str, default: float | None) -> float | None:
 # ---------------------------------------------------------------------------
 # Models (OpenAI platform defaults; override per agent through the environment)
 # ---------------------------------------------------------------------------
-# Defaults chosen from the OpenAI line-up of October 2026 (openai SDK 3.35):
-# the GPT-5.6 family (sol = flagship, terra = mid, luna = small). The original
-# gpt-5 / gpt-5-mini / gpt-5-nano ids are deprecated (shutdown 2026-12-11).
+# Every agent runs on GPT-6 Astra ("gpt-6-astra", the id listed by openai SDK
+# 3.35 in October 2026); the four roles below are kept so that a cheaper or
+# different model can still be assigned per role through the environment.
 # Interpretation layer (sketch + text; needs image input).
-DEFAULT_VISION_MODEL = "gpt-5.6-terra"
+DEFAULT_VISION_MODEL = "gpt-6-astra"
 # Code synthesis for the simpler agents (basis, instantiation).
-DEFAULT_CODE_MODEL = "gpt-5.6-terra"
-# Harder code reasoning (configuration, fixer), as the paper used its larger
-# coder model for these two agents.
-DEFAULT_REASONING_CODE_MODEL = "gpt-5.6-sol"
-# Cheap model for the auxiliary description validator (text only).
-DEFAULT_LIGHT_MODEL = "gpt-5.6-luna"
+DEFAULT_CODE_MODEL = "gpt-6-astra"
+# Harder code reasoning (configuration, fixer).
+DEFAULT_REASONING_CODE_MODEL = "gpt-6-astra"
+# Auxiliary description validator (text only).
+DEFAULT_LIGHT_MODEL = "gpt-6-astra"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 
 DESCRIPTOR_MODEL = _env_str("S2S_DESCRIPTOR_MODEL", DEFAULT_VISION_MODEL)
@@ -199,7 +201,9 @@ LLM_MAX_RETRIES = _env_int("S2S_LLM_MAX_RETRIES", 2)
 # ---------------------------------------------------------------------------
 LLM_TEMPERATURE: float | None = _env_optional_float("S2S_LLM_TEMPERATURE", 0.0)
 LLM_SEED: int | None = _env_optional_int("S2S_LLM_SEED", 42)
-LLM_REASONING_EFFORT = _env_str("S2S_LLM_REASONING_EFFORT", "medium") or None
+# "max" is the top of the API's ladder (none, minimal, low, medium, high,
+# xhigh, max); llm.py steps down one level when a model rejects a level.
+LLM_REASONING_EFFORT = _env_str("S2S_LLM_REASONING_EFFORT", "max") or None
 
 # Output caps. The original pipeline used num_predict=5000 for the code
 # agents; with reasoning models the cap also covers reasoning tokens, and the

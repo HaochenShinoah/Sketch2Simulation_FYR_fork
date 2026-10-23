@@ -37,6 +37,11 @@ _client = None
 _client_lock = threading.Lock()
 _call_log_path: str | None = None
 _unsupported_by_model: dict[str, set[str]] = {}
+# Reasoning effort levels from highest to lowest. When a model rejects a level
+# the request is retried one level lower, and the accepted level is remembered
+# per model so later calls start there.
+_EFFORT_LADDER = ["max", "xhigh", "high", "medium", "low", "minimal"]
+_effort_ceiling_by_model: dict[str, str] = {}
 
 # Parameters that may be dropped when a model rejects them. Anything else that
 # is rejected is a real error and is raised.
@@ -107,6 +112,7 @@ def reset_client() -> None:
     with _client_lock:
         _client = None
     _unsupported_by_model.clear()
+    _effort_ceiling_by_model.clear()
 
 
 def set_call_log(path: str | None) -> None:
@@ -556,6 +562,46 @@ def _error_code(error: Exception) -> str | None:
     return code
 
 
+def _effort_value(kwargs: dict[str, Any], param: str) -> str | None:
+    if param == "reasoning":
+        reasoning = kwargs.get("reasoning")
+        return reasoning.get("effort") if isinstance(reasoning, dict) else None
+    return kwargs.get("reasoning_effort")
+
+
+def _set_effort_value(kwargs: dict[str, Any], param: str, value: str) -> None:
+    if param == "reasoning":
+        reasoning = kwargs.get("reasoning")
+        base = reasoning if isinstance(reasoning, dict) else {}
+        kwargs["reasoning"] = {**base, "effort": value}
+    else:
+        kwargs["reasoning_effort"] = value
+
+
+def _lower_effort(value: str | None) -> str | None:
+    """The next lower level of the ladder, or None when there is none."""
+    if value not in _EFFORT_LADDER:
+        return None
+    index = _EFFORT_LADDER.index(value) + 1
+    return _EFFORT_LADDER[index] if index < len(_EFFORT_LADDER) else None
+
+
+def _apply_effort_ceiling(kwargs: dict[str, Any], model: str, stripped: list[str]):
+    """Start at the highest effort this model is known to accept."""
+    ceiling = _effort_ceiling_by_model.get(model)
+    if ceiling is None:
+        return
+    for param in ("reasoning", "reasoning_effort"):
+        if param not in kwargs:
+            continue
+        current = _effort_value(kwargs, param)
+        if current in _EFFORT_LADDER and _EFFORT_LADDER.index(
+            current
+        ) < _EFFORT_LADDER.index(ceiling):
+            _set_effort_value(kwargs, param, ceiling)
+            stripped.append(f"{param}:{current}->{ceiling}")
+
+
 def _invoke_with_param_fallback(call, kwargs: dict[str, Any], model: str):
     from openai import BadRequestError
 
@@ -567,8 +613,9 @@ def _invoke_with_param_fallback(call, kwargs: dict[str, Any], model: str):
             if param == "max_completion_tokens" and "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = value  # legacy gateways
             stripped.append(param)
+    _apply_effort_ceiling(kwargs, model, stripped)
 
-    for _ in range(len(_STRIPPABLE_PARAMS) + 2):
+    for _ in range(len(_STRIPPABLE_PARAMS) + len(_EFFORT_LADDER) + 2):
         try:
             return call(**kwargs), stripped
         except BadRequestError as error:
@@ -583,16 +630,23 @@ def _invoke_with_param_fallback(call, kwargs: dict[str, Any], model: str):
                 continue
             if (
                 param in {"reasoning", "reasoning_effort"}
-                and _error_code(error) == "unsupported_value"
+                and _error_code(error) != "unsupported_parameter"
             ):
-                # The model does support reasoning controls but not this effort
-                # value: silently dropping it would run every later call at the
-                # model default, so report it instead.
-                raise LLMError(
-                    f"Model {model!r} rejected the reasoning effort "
-                    f"{kwargs.get(param)!r}: {str(error).splitlines()[0][:200]}. "
-                    "Set S2S_LLM_REASONING_EFFORT to a value this model supports."
-                ) from error
+                # The model supports reasoning controls but not this effort
+                # level: step down one level, remember the ceiling for this
+                # model and record the change in the call log. Only when the
+                # ladder is exhausted is the parameter dropped like any other.
+                current = _effort_value(kwargs, param)
+                lower = _lower_effort(current)
+                if lower is not None:
+                    _set_effort_value(kwargs, param, lower)
+                    _effort_ceiling_by_model[model] = lower
+                    stripped.append(f"{param}:{current}->{lower}")
+                    print(
+                        f"[llm] {model}: reasoning effort {current!r} rejected, "
+                        f"retrying with {lower!r}"
+                    )
+                    continue
             value = kwargs.pop(param, None)
             known_unsupported.add(param)
             stripped.append(param)

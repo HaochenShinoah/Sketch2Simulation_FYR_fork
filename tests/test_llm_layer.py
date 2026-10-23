@@ -287,23 +287,52 @@ def test_truncated_and_failed_responses_raise(monkeypatch):
         llm.complete("gpt-5.6-terra", None, "USER")
 
 
-def test_invalid_reasoning_effort_value_raises(monkeypatch):
+def test_unsupported_reasoning_effort_steps_down_and_is_remembered(monkeypatch):
     monkeypatch.setattr(config, "OPENAI_API_MODE", "responses")
+    recorder = _Recorder({})
+    accepted = {"high", "medium", "low", "minimal"}
 
     def create(**kwargs):
-        raise _bad_request(
-            "Unsupported value: 'reasoning.effort' does not support 'xhigh' with this model.",
-            "reasoning.effort",
-            "unsupported_value",
-        )
+        effort = (kwargs.get("reasoning") or {}).get("effort")
+        if effort not in accepted:
+            raise _bad_request(
+                f"Unsupported value: 'reasoning.effort' does not support '{effort}' "
+                "with this model.",
+                "reasoning.effort",
+                "unsupported_value",
+            )
+        return recorder.responses_create(**kwargs)
 
     monkeypatch.setattr(
         llm,
         "get_client",
         lambda: SimpleNamespace(responses=SimpleNamespace(create=create)),
     )
-    with pytest.raises(llm.LLMError, match="reasoning effort"):
-        llm.complete("gpt-5.6-terra", None, "USER", reasoning_effort="xhigh")
+    result = llm.complete("gpt-6-astra", None, "USER", reasoning_effort="max")
+    assert result.text == "ok"
+    # max and xhigh were rejected, high accepted: one request per level
+    assert [c["reasoning"]["effort"] for c in recorder.calls] == ["high"]
+    assert result.stripped_params == [
+        "reasoning:max->xhigh",
+        "reasoning:xhigh->high",
+    ]
+    # the accepted level is remembered: the next call starts at high directly
+    result = llm.complete("gpt-6-astra", None, "USER", reasoning_effort="max")
+    assert result.stripped_params == ["reasoning:max->high"]
+    assert [c["reasoning"]["effort"] for c in recorder.calls] == ["high", "high"]
+    # another model is not affected by the first model's ceiling
+    result = llm.complete("gpt-6-sol", None, "USER", reasoning_effort="high")
+    assert result.stripped_params == []
+
+
+def test_reasoning_parameter_itself_unsupported_is_dropped(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_MODE", "chat")
+    recorder = _Recorder({"reasoning_effort": "unsupported_parameter"})
+    monkeypatch.setattr(llm, "get_client", lambda: _fake_client(recorder))
+    result = llm.complete("gpt-6-astra", None, "USER", reasoning_effort="max")
+    assert result.text == "ok"
+    assert "reasoning_effort" not in recorder.calls[-1]
+    assert result.stripped_params == ["reasoning_effort"]
 
 
 def test_chat_legacy_gateway_falls_back_to_max_tokens(monkeypatch):

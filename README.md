@@ -62,12 +62,12 @@ Optional variables (all have defaults, see `sketch2sim/config.py`):
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `S2S_DESCRIPTOR_MODEL`, `S2S_EXTRACTOR_MODEL` | vision models for Steps 1 and 3 | `gpt-5.6-terra` |
-| `S2S_DESCRIPTION_VALIDATOR_MODEL` | Step 2 | `gpt-5.6-luna` |
-| `S2S_BASIS_MODEL`, `S2S_INSTANTIATION_MODEL` | code agents (simpler) | `gpt-5.6-terra` |
-| `S2S_CONFIGURATION_MODEL`, `S2S_FIXER_MODEL` | code agents (harder) | `gpt-5.6-sol` |
+| `S2S_DESCRIPTOR_MODEL`, `S2S_EXTRACTOR_MODEL` | vision models for Steps 1 and 3 | `gpt-6-astra` |
+| `S2S_DESCRIPTION_VALIDATOR_MODEL` | Step 2 | `gpt-6-astra` |
+| `S2S_BASIS_MODEL`, `S2S_INSTANTIATION_MODEL` | code agents (simpler) | `gpt-6-astra` |
+| `S2S_CONFIGURATION_MODEL`, `S2S_FIXER_MODEL` | code agents (harder) | `gpt-6-astra` |
 | `S2S_EMBEDDING_MODEL` | RAG embeddings | `text-embedding-3-small` |
-| `S2S_LLM_REASONING_EFFORT` | reasoning effort for reasoning-capable models (`none` … `high`) | `medium` |
+| `S2S_LLM_REASONING_EFFORT` | reasoning effort for reasoning-capable models (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); a level the model rejects is retried one level lower and the change is logged | `max` |
 | `S2S_LLM_TEMPERATURE`, `S2S_LLM_SEED` | deterministic decoding of the paper (dropped automatically where a model rejects them) | `0.0`, `42` |
 | `S2S_OPENAI_API_MODE` | `responses` (default) or `chat` for OpenAI-compatible gateways | `responses` |
 | `S2S_OPENAI_STORE` | `1` lets the Responses API keep responses server-side for 30 days | `0` |
@@ -137,14 +137,14 @@ Defaults are set in `sketch2sim/config.py` and can be overridden per agent throu
 
 | Agent | Original (paper) | This fork (default) |
 |-------|------------------|---------------------|
-| Descriptor | Gemini 3 Flash (Ollama cloud) | `gpt-5.6-terra` |
-| Description Validator | Qwen3-VL 8B (local) | `gpt-5.6-luna` |
-| Extractor | Gemini 3 Flash (Ollama cloud) | `gpt-5.6-terra` |
-| Basis / Instantiation | Qwen2.5-Coder 7B (local) | `gpt-5.6-terra` |
-| Configuration / Fixer | Qwen3-Coder 30B (local) | `gpt-5.6-sol` |
+| Descriptor | Gemini 3 Flash (Ollama cloud) | `gpt-6-astra` |
+| Description Validator | Qwen3-VL 8B (local) | `gpt-6-astra` |
+| Extractor | Gemini 3 Flash (Ollama cloud) | `gpt-6-astra` |
+| Basis / Instantiation | Qwen2.5-Coder 7B (local) | `gpt-6-astra` |
+| Configuration / Fixer | Qwen3-Coder 30B (local) | `gpt-6-astra` |
 | RAG embeddings | all-MiniLM-L6-v2 (local) | `text-embedding-3-small` |
 
-Decoding follows the paper where the API allows it (temperature 0, seed 42 in Chat Completions mode). Reasoning models accept sampling parameters only with reasoning effort `none`, so with the default effort (`medium`) the temperature is not sent; any parameter a model rejects is dropped for that model and recorded in `logs/llm_calls.jsonl`, so every run stays auditable. The GPT-5.6 ids were current in October 2026; check the OpenAI model page when a model is retired (`gpt-5`, `gpt-5-mini` and `gpt-5-nano` shut down on 2026-12-11) and override with the `S2S_*_MODEL` variables.
+Decoding follows the paper where the API allows it (temperature 0, seed 42 in Chat Completions mode). Reasoning models accept sampling parameters only with reasoning effort `none`, so with the default effort (`max`) the temperature is not sent. The effort is the top of the API's ladder; if a model rejects a level, the call is retried one level lower (`max` → `xhigh` → `high` → …), the accepted level is remembered for that model, and the change is recorded in `logs/llm_calls.jsonl`, as is any other parameter a model rejects, so every run stays auditable. The `gpt-6-astra` id was current in October 2026 (openai SDK 3.35); check the OpenAI model page when a model is retired and override with the `S2S_*_MODEL` variables.
 
 ---
 

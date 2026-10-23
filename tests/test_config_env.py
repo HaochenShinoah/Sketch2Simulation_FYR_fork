@@ -32,3 +32,17 @@ def test_load_dotenv_accepts_bom_utf16_quotes_and_comments(tmp_path, monkeypatch
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
     assert config.load_dotenv(tmp_path / "ascii.env") == {}
     assert config.load_dotenv(tmp_path / "missing.env") == {}
+
+
+def test_default_models_and_effort():
+    """Every agent defaults to GPT-6 Astra; the embedding model is separate."""
+    import re
+    from pathlib import Path
+
+    assert config.DEFAULT_VISION_MODEL == "gpt-6-astra"
+    assert config.DEFAULT_CODE_MODEL == "gpt-6-astra"
+    assert config.DEFAULT_REASONING_CODE_MODEL == "gpt-6-astra"
+    assert config.DEFAULT_LIGHT_MODEL == "gpt-6-astra"
+    assert config.DEFAULT_EMBEDDING_MODEL == "text-embedding-3-small"
+    source = Path(config.__file__).read_text(encoding="utf-8")
+    assert re.search(r'_env_str\("S2S_LLM_REASONING_EFFORT", "max"\)', source)
