@@ -46,3 +46,22 @@ def test_default_models_and_effort():
     assert config.DEFAULT_EMBEDDING_MODEL == "text-embedding-3-small"
     source = Path(config.__file__).read_text(encoding="utf-8")
     assert re.search(r'_env_str\("S2S_LLM_REASONING_EFFORT", "max"\)', source)
+
+
+def test_default_caps_and_timeout_fit_reasoning_effort_max():
+    """At effort "max" the reasoning tokens count against the per-agent caps,
+    so every cap leaves room for a long think, and a call may run long."""
+    caps = {
+        "descriptor": config.DESCRIPTOR_MAX_OUTPUT_TOKENS,
+        "description_validator": config.DESCRIPTION_VALIDATOR_MAX_OUTPUT_TOKENS,
+        "extractor": config.EXTRACTOR_MAX_OUTPUT_TOKENS,
+        "basis": config.BASIS_MAX_OUTPUT_TOKENS,
+        "instantiation": config.INSTANTIATION_MAX_OUTPUT_TOKENS,
+        "configuration": config.CONFIGURATION_MAX_OUTPUT_TOKENS,
+        "fixer": config.FIXER_MAX_OUTPUT_TOKENS,
+    }
+    assert all(cap >= 16000 for cap in caps.values()), caps
+    assert caps["descriptor"] >= 32000  # hit 8000 on cs1 at effort max
+    assert caps["fixer"] == max(caps.values())  # it echoes the whole script
+    assert config.LLM_TIMEOUT >= 3600
+    assert config.LLM_MAX_RETRIES >= 3

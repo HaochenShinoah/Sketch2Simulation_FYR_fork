@@ -457,3 +457,75 @@ def test_ensure_json_word_with_images_and_chat_parts():
         llm.ensure_json_word({"messages": [{"role": "system", "content": "json"}]})
         is False
     )
+
+
+def test_output_cap_above_model_maximum_is_clamped_and_remembered(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_MODE", "responses")
+    recorder = _Recorder({})
+
+    def create(**kwargs):
+        cap = kwargs.get("max_output_tokens")
+        if kwargs["model"] == "gpt-6-astra" and cap is not None and cap > 128000:
+            raise _bad_request(
+                "Invalid 'max_output_tokens': integer above maximum value. "
+                f"Expected a value <= 128000, but got {cap} instead.",
+                "max_output_tokens",
+                "integer_above_max_value",
+            )
+        if cap is not None and cap < 0:
+            raise _bad_request(
+                "Invalid 'max_output_tokens': integer below minimum value.",
+                "max_output_tokens",
+                "integer_below_min_value",
+            )
+        return recorder.responses_create(**kwargs)
+
+    monkeypatch.setattr(
+        llm,
+        "get_client",
+        lambda: SimpleNamespace(responses=SimpleNamespace(create=create)),
+    )
+    result = llm.complete("gpt-6-astra", None, "USER", max_output_tokens=200000)
+    assert result.text == "ok"
+    assert [c["max_output_tokens"] for c in recorder.calls] == [128000]
+    assert result.stripped_params == ["max_output_tokens:200000->128000"]
+    # the maximum is remembered: the next call is clamped before it is sent
+    result = llm.complete("gpt-6-astra", None, "USER", max_output_tokens=150000)
+    assert [c["max_output_tokens"] for c in recorder.calls] == [128000, 128000]
+    assert result.stripped_params == ["max_output_tokens:150000->128000"]
+    # a cap under the maximum is sent as it is; another model is not affected
+    llm.complete("gpt-6-astra", None, "USER", max_output_tokens=1000)
+    assert recorder.calls[-1]["max_output_tokens"] == 1000
+    result = llm.complete("gpt-6-sol", None, "USER", max_output_tokens=150000)
+    assert result.stripped_params == []
+    # any other bad request is still raised
+    with pytest.raises(openai.BadRequestError):
+        llm.complete("gpt-6-astra", None, "USER", max_output_tokens=-5)
+
+
+def test_chat_cap_too_large_message_without_param_is_clamped(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_MODE", "chat")
+    recorder = _Recorder({})
+
+    def create(**kwargs):
+        cap = kwargs.get("max_completion_tokens")
+        if cap is not None and cap > 65536:
+            raise _bad_request(
+                f"max_tokens is too large: {cap}. This model supports at most "
+                f"65536 completion tokens, whereas you provided {cap}.",
+                None,
+                None,
+            )
+        return recorder.chat_create(**kwargs)
+
+    monkeypatch.setattr(
+        llm,
+        "get_client",
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        ),
+    )
+    result = llm.complete("gpt-6-astra", None, "USER", max_output_tokens=96000)
+    assert result.text == "ok"
+    assert recorder.calls[-1]["max_completion_tokens"] == 65536
+    assert result.stripped_params == ["max_completion_tokens:96000->65536"]

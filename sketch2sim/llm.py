@@ -42,6 +42,16 @@ _unsupported_by_model: dict[str, set[str]] = {}
 # per model so later calls start there.
 _EFFORT_LADDER = ["max", "xhigh", "high", "medium", "low", "minimal"]
 _effort_ceiling_by_model: dict[str, str] = {}
+# Output caps above the maximum of a model are clamped to the maximum the API
+# names in its error ("Expected a value <= 128000", "supports at most 65536
+# completion tokens"); the maximum is remembered per model.
+_OUTPUT_CAP_PARAMS = ("max_output_tokens", "max_completion_tokens", "max_tokens")
+_CAP_CEILING_RE = re.compile(
+    r"(?:<=|at most|maximum(?: value)?(?: is| of)?|less than or equal to|"
+    r"cannot exceed|must not exceed|limit(?: is| of)?|up to)\s*:?\s*(\d{3,})",
+    re.IGNORECASE,
+)
+_output_cap_ceiling_by_model: dict[str, int] = {}
 
 # Parameters that may be dropped when a model rejects them. Anything else that
 # is rejected is a real error and is raised.
@@ -113,6 +123,7 @@ def reset_client() -> None:
         _client = None
     _unsupported_by_model.clear()
     _effort_ceiling_by_model.clear()
+    _output_cap_ceiling_by_model.clear()
 
 
 def set_call_log(path: str | None) -> None:
@@ -602,6 +613,61 @@ def _apply_effort_ceiling(kwargs: dict[str, Any], model: str, stripped: list[str
             stripped.append(f"{param}:{current}->{ceiling}")
 
 
+def _cap_param_in_error(error: Exception, kwargs: dict[str, Any]) -> str | None:
+    """The output-cap kwarg an error is about (the API may name ``max_tokens``
+    for a ``max_completion_tokens`` request), or None."""
+    param = getattr(error, "param", None)
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        error_obj = body.get("error", body)
+        if isinstance(error_obj, dict):
+            param = param or error_obj.get("param")
+    message = str(error)
+    if not (
+        param in _OUTPUT_CAP_PARAMS or any(n in message for n in _OUTPUT_CAP_PARAMS)
+    ):
+        return None
+    return next((name for name in _OUTPUT_CAP_PARAMS if name in kwargs), None)
+
+
+def _clamp_output_cap(
+    error: Exception, kwargs: dict[str, Any], model: str, stripped: list[str]
+) -> bool:
+    """A cap above the maximum of the model: clamp it to the maximum the API
+    names, remember it for the model and log the change. Returns True when
+    the request should be retried."""
+    param = _cap_param_in_error(error, kwargs)
+    if param is None:
+        return False
+    match = _CAP_CEILING_RE.search(str(error))
+    current = kwargs.get(param)
+    if match is None or not isinstance(current, int):
+        return False
+    ceiling = int(match.group(1))
+    if ceiling <= 0 or ceiling >= current:
+        return False
+    kwargs[param] = ceiling
+    _output_cap_ceiling_by_model[model] = ceiling
+    stripped.append(f"{param}:{current}->{ceiling}")
+    print(
+        f"[llm] {model}: {param}={current} is above the maximum of the model, "
+        f"retrying with {ceiling}"
+    )
+    return True
+
+
+def _apply_output_cap_ceiling(kwargs: dict[str, Any], model: str, stripped: list[str]):
+    """Start under the output cap this model is known to accept."""
+    ceiling = _output_cap_ceiling_by_model.get(model)
+    if ceiling is None:
+        return
+    for param in _OUTPUT_CAP_PARAMS:
+        current = kwargs.get(param)
+        if isinstance(current, int) and current > ceiling:
+            kwargs[param] = ceiling
+            stripped.append(f"{param}:{current}->{ceiling}")
+
+
 def _invoke_with_param_fallback(call, kwargs: dict[str, Any], model: str):
     from openai import BadRequestError
 
@@ -614,13 +680,16 @@ def _invoke_with_param_fallback(call, kwargs: dict[str, Any], model: str):
                 kwargs["max_tokens"] = value  # legacy gateways
             stripped.append(param)
     _apply_effort_ceiling(kwargs, model, stripped)
+    _apply_output_cap_ceiling(kwargs, model, stripped)
 
-    for _ in range(len(_STRIPPABLE_PARAMS) + len(_EFFORT_LADDER) + 2):
+    for _ in range(len(_STRIPPABLE_PARAMS) + len(_EFFORT_LADDER) + 3):
         try:
             return call(**kwargs), stripped
         except BadRequestError as error:
             param = _offending_param(error, kwargs)
             if param is None:
+                if _clamp_output_cap(error, kwargs, model, stripped):
+                    continue
                 raise
             if param in {"text", "response_format"}:
                 if _downgrade_output_format(kwargs, param):
