@@ -69,6 +69,8 @@ def _build_prompt() -> str:
         "- When a line joins another line before a unit, say which unit the combined "
         "stream enters.\n"
         "- Quote tray or stage numbers written on columns.\n"
+        "- Call every stream and equipment item by a short label of at most four "
+        "words, as a flow diagram does; describe, do not name with sentences.\n"
         "- Do not write code.\n"
     )
 

@@ -30,6 +30,7 @@ This fork of [OptiMaL-PSE-Lab/Sketch2Simulation](https://github.com/OptiMaL-PSE-
 | 7 | Unit IN/OUT view | Unit-centric view of the stream graph | rules |
 | 8 | Configuration Agent | Connects streams to unit ports (template Step 6) | LLM + instruction file |
 | 9 | Executor + Fixer | Runs the script against HYSYS, one HYSYS instance per attempt (every attempt quits its instance; set `S2S_HYSYS_KEEP_OPEN=1` to keep a successful one open); on failure the Fixer repairs Steps 2–6 from the runtime log (3 retries) | HYSYS COM + LLM |
+| 9b | PFD layout | Inside the generated script, before the case is saved: arranges the diagram (units left to right in process order, feeds on the left, products on the right, recycles on their own lanes, energy streams below their unit); graphics only, the attachment check runs after it | rules (`sketch2sim/pfd_layout.py`) |
 
 The orchestration lives in `sketch2sim/pipeline.py` (`PipelineConfig` / `run_pipeline`); each agent is a one-node LangGraph graph as in the original.
 
@@ -80,6 +81,7 @@ Optional variables (all have defaults, see `sketch2sim/config.py`):
 | `S2S_HSC_SUFFIX` | suffix of the case file of one attempt (`_attemptN`); set by the executor, not by hand | unset |
 | `S2S_HYSYS_KEEP_OPEN` | `0` quits every HYSYS instance the scripts start (open the saved `.hsc` to look at the flowsheet); `1` keeps the instance of a successful run open, which must then be closed before the next run (a script started next to an open HYSYS attaches to it instead of starting its own process, and `SimulationCases.Add` fails) | `0` |
 | `S2S_STRICT_CONNECTIONS` | `0` → missing stream connections do not fail the script | `1` |
+| `S2S_PFD_LAYOUT`, `S2S_PFD_HIDE_HELPER_LABELS` | `0` leaves the diagram as HYSYS draws it; `1` hides the labels of the normaliser-made streams (`Mixer outlet to …`, `Burner feed to …`) | `1`, `0` |
 
 ### 3. Aspen HYSYS (execution stage only)
 
@@ -129,6 +131,12 @@ python tools/hysys_discover_com_api.py            # writes logs/hysys_com_discov
 python tools/hysys_discover_com_api.py --visible  # show the HYSYS window
 ```
 
+**Tidying an existing case.** Cases built before the PFD layout step (or edited by hand) can be arranged afterwards; the copy is saved next to the original and `--verify` reopens it and compares operations, attachments, stream names and values, fluid package and components with the original (expected: identical):
+
+```bash
+python tools/hysys_layout_pfd.py outputs/cs4/Case.hsc --verify --screenshot outputs/cs4/Case_pfd.png
+```
+
 It reads `TYPES` and `PORTS` from the template, starts its own HYSYS instance (`DispatchEx`, retrying `SimulationCases.Add` while HYSYS starts), creates a scratch case, tries every candidate type string in the template's order, lists the stream-port members of every object HYSYS creates, probes every template port member with real streams and reads `AttachedFeeds` / `AttachedProducts` back after each probe, so the report distinguishes "attached" from "accepted but not attached"; columns get their template loaded and their feed, product and side-draw members probed the same way. At the end it quits its instance and waits until the process has exited. The report says per category whether the template's first choice worked; use it to edit `TYPES` / `PORTS` and the instruction files when a HYSYS version behaves differently.
 
 ---
@@ -166,6 +174,7 @@ Decoding follows the paper where the API allows it (temperature 0, seed 42 in Ch
     ├── pipeline.py                     # the nine steps; CLI `python -m sketch2sim.pipeline`
     ├── agents/                         # descriptor, validator, extractor, basis, instantiation,
     │                                   # configuration, fixer, executor
+    ├── pfd_layout.py                   # deterministic PFD layout (graphics only), used by the generated script and tools/hysys_layout_pfd.py
     ├── mixing_points_normalizer.py, splitting_points_normalizer.py, coupling_normalizer.py,
     │   merge_simulation_scripts.py
     ├── utils/                          # orchestration, logging, unit-view helpers

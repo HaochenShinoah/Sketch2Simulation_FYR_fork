@@ -183,6 +183,16 @@ STUB = textwrap.dedent(
                     return  # accepted by HYSYS, nothing attached
                 self._attach("in" if item in IN_MEMBERS else "out", value, item, True)
                 return
+            if item == "EnergyStream" and value is not None:
+                # HYSYS lists the energy stream among the feeds and products
+                for streams in (self._feeds, self._products):
+                    if value not in streams:
+                        streams.append(value)
+            if item in ("name", "Name"):
+                while any(o is not self and o.name == value for o in self._fs._ops):
+                    value = value + "_2"  # HYSYS keeps operation names unique
+                self.__dict__["name"] = value
+                return
             self.__dict__[item] = value
 
     class TraySection(Op):
@@ -247,6 +257,8 @@ STUB = textwrap.dedent(
             self._fs = fs
         def Add(self, name, type_name=None):
             _check("Operations")
+            while any(op.name == name for op in self._fs._ops):
+                name = name + "_2"  # HYSYS keeps operation names unique
             op = Op(self._fs, name, str(type_name))
             self._fs._ops.append(op)
             return op
@@ -264,6 +276,8 @@ STUB = textwrap.dedent(
             self._fs = fs
         def Add(self, name):
             _check("MaterialStreams")
+            while self._fs._find_stream(name) is not None:
+                name = name + "_2"  # HYSYS keeps stream names unique
             stream = Stream(name)
             self._fs._streams.append(stream)
             return stream
@@ -291,12 +305,153 @@ STUB = textwrap.dedent(
             self._fs._energy.append(stream)
             return stream
 
+    # --- PFD (graphics) model: items with positions, HYSYS's ordering rule ---
+    ICON = {"distillation": (138.0, 228.0), "flashtank": (56.0, 144.0),
+            "sep3op": (56.0, 144.0), "tankop": (56.0, 144.0), "mixerop": (48.0, 76.0),
+            "teeop": (48.0, 76.0), "compressor": (72.0, 56.0)}
+
+    class PfdItem:
+        def __init__(self, fs, name, kind, width, height, index):
+            d = self.__dict__
+            d["_fs"], d["name"], d["Type"] = fs, name, kind
+            d["Width"], d["Height"], d["Hidden"] = width, height, False
+            d["XPosition"], d["YPosition"] = 60.0 * index, 0.0
+        def _unit(self):
+            for op in self._fs._ops:
+                if op.name == self.name:
+                    return op
+            return None
+        def _ends(self, stream_name):
+            '''(source unit item, destination unit item) of a stream, or Nones.'''
+            items = self._fs._pfd._items
+            source = destination = None
+            for other in self._fs._ops:
+                if any(s.name == stream_name for s in other._products):
+                    source = items.get(other.name)
+                if any(s.name == stream_name for s in other._feeds):
+                    destination = items.get(other.name)
+            return source, destination
+        def _forward(self, stream_name):
+            source, destination = self._ends(stream_name)
+            return not (source and destination and source.XPosition > destination.XPosition)
+        def _allowed(self, x):
+            '''HYSYS keeps feed icon < unit < product icon on the x axis (for
+            streams that run forward; a recycle icon can satisfy neither side).'''
+            op = self._unit()
+            items = self._fs._pfd._items
+            if op is not None:
+                for s in op._feeds:
+                    if s.energy or not self._forward(s.name):
+                        continue
+                    if s.name in items and items[s.name].XPosition >= x:
+                        return False
+                for s in op._products:
+                    if s.energy or not self._forward(s.name):
+                        continue
+                    if s.name in items and items[s.name].XPosition <= x:
+                        return False
+                return True
+            if any(s.name == self.name for s in self._fs._energy):
+                return True  # duty icons move freely (cs4 astra: E-Reactor)
+            if not self._forward(self.name):
+                return False
+            source, destination = self._ends(self.name)
+            if source is not None and source.XPosition >= x:
+                return False
+            return not (destination is not None and destination.XPosition <= x)
+        def __setattr__(self, item, value):
+            if item == "XPosition" and not self._allowed(float(value)):
+                return  # silently refused, as HYSYS does
+            if item in ("Width", "Height"):
+                return  # ignored, as HYSYS does
+            self.__dict__[item] = value
+
+    class PfdItems:
+        def __init__(self, items):
+            self._list = list(items)
+        @property
+        def Names(self):
+            return [it.name for it in self._list]
+        @property
+        def Count(self):
+            return len(self._list)
+        def Item(self, key):
+            if isinstance(key, int):
+                return self._list[key]
+            for it in self._list:
+                if it.name == key:
+                    return it
+            raise ComError("not found")
+
+    class Pfd:
+        def __init__(self, fs):
+            self._fs, self.name, self._items, self._labels = fs, "PFD 1", {}, {}
+        def _sync(self):
+            '''Items as HYSYS creates them: units in a row, every stream icon
+            next to its units (so the ordering rule holds from the start).'''
+            index = len(self._items)
+            for op in self._fs._ops:
+                if op.name not in self._items:
+                    w, h = ICON.get(op.TypeName, (64.0, 56.0))
+                    self._items[op.name] = PfdItem(self._fs, op.name, -2, w, h, index)
+                    self._items[op.name].__dict__["XPosition"] = 120.0 * index
+                    self._labels[op.name] = PfdItem(self._fs, "", -4, 60.0, 0.0, index)
+                    index += 1
+            for s in self._fs._streams + self._fs._energy:
+                if s.name in self._items:
+                    continue
+                item = PfdItem(self._fs, s.name, -2, 34.0, 12.0, index)
+                source, destination = item._ends(s.name)
+                if source is not None and destination is not None:
+                    x = (source.XPosition + destination.XPosition) / 2
+                elif source is not None:
+                    x = source.XPosition + 60.0
+                elif destination is not None:
+                    x = destination.XPosition - 60.0
+                else:
+                    x = 120.0 * index
+                item.__dict__["XPosition"] = x
+                self._items[s.name] = item
+                self._labels[s.name] = PfdItem(self._fs, "", -4, 60.0, 0.0, index)
+                index += 1
+        @property
+        def Items(self):
+            return None  # the real property returns nothing either
+        def GetItems(self, kind, visibility):
+            self._sync()
+            if kind == -2:
+                return PfdItems(self._items.values())
+            if kind == -4:
+                for owner, label in self._labels.items():
+                    it = self._items[owner]
+                    label.__dict__["XPosition"] = it.XPosition
+                    label.__dict__["YPosition"] = it.YPosition + it.Height + 8
+                return PfdItems(self._labels.values())
+            return PfdItems([])
+        def Centre(self):
+            pass
+
+    class PFDsColl:
+        def __init__(self, fs):
+            self._fs = fs
+        @property
+        def Count(self):
+            return 1 if self._fs._shown else 0
+        @property
+        def ActivePFD(self):
+            if not self._fs._shown:
+                raise ComError("(-2147352567, 'Exception occurred.', None, None)")
+            return self._fs._pfd
+
     class Flowsheet:
         def __init__(self):
             self._ops, self._streams, self._energy = [], [], []
+            self._shown = False
+            self._pfd = Pfd(self)
             self.Operations = OperationsColl(self)
             self.MaterialStreams = MaterialStreamsColl(self)
             self.EnergyStreams = EnergyStreamsColl(self)
+            self.PFDs = PFDsColl(self)
         def _find_stream(self, name):
             for s in self._streams:
                 if s.name == name:
@@ -326,7 +481,7 @@ STUB = textwrap.dedent(
         def Close(self):
             pass
         def Activate(self):
-            pass
+            self.Flowsheet._shown = True  # the PFD view exists from now on
 
     class SimulationCases:
         def Add(self, name):
@@ -337,6 +492,8 @@ STUB = textwrap.dedent(
             self.SimulationCases = SimulationCases()
             self.Visible = False
         def Quit(self):
+            pass
+        def DoEvents(self):
             pass
 
     def Dispatch(progid):
@@ -429,6 +586,14 @@ def test_generated_script_runs_against_com_stub(fake_llm, repo_cwd, tmp_path, ca
     assert "[summary] all listed connections attached" in result.stdout
     assert "[connect] WARNING" not in result.stdout
     assert list((tmp_path / "hsc").glob("*_topology.json")), "topology report"
+    # Step 7 arranged the diagram: every item placed, only recycle icons (which
+    # can satisfy neither side of the ordering rule) may keep HYSYS's position
+    assert "[pfd] layout:" in result.stdout and "layout skipped" not in result.stdout
+    pfd_report = json.loads(
+        next((tmp_path / "hsc").glob("*_pfd.json")).read_text(encoding="utf-8")
+    )
+    assert set(pfd_report["refused"]) <= set(pfd_report["recycles"]), pfd_report
+    assert pfd_report["missing"] == []
     if case in ("cs3", "cs4", "cs3b", "cs4b"):
         # columns get their template loaded and real tray feeds
         assert "distillation, template:" in result.stdout

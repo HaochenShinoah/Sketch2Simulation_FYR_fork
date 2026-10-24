@@ -76,6 +76,12 @@ Read by the generated script (set by the executor or by you)
                                 "[hysys] attempt N" log line.
     S2S_STRICT_CONNECTIONS      "1" (default): a connection that could not be
                                 made exits with code 2; "0" only reports it.
+    S2S_PFD_LAYOUT              "1" (default): the script arranges the PFD
+                                (graphics only: icon positions) before saving;
+                                "0" leaves the diagram as HYSYS draws it.
+    S2S_PFD_HIDE_HELPER_LABELS  "1" hides the labels of the streams the
+                                normaliser made ("Mixer outlet to ...",
+                                "Burner feed to ..."); default "0".
 """
 
 from __future__ import annotations

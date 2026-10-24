@@ -92,6 +92,16 @@ for _attempt in range(12):
 if case is None:
     raise RuntimeError("HYSYS did not accept a new simulation case within 60 s")
 case.Visible = True
+# Show the case window and let HYSYS draw it: the PFD (the flowsheet diagram)
+# exists only then, and every object added afterwards gets its graphic item at
+# once. Step 7 lays the diagram out before saving.
+try:
+    case.Activate()
+    for _ in range(10):
+        hysys.DoEvents()
+        time.sleep(0.2)
+except Exception as _error:
+    print(f"[hysys] could not activate the case window ({str(_error)[:80]})")
 
 # === Step 2: Setup Property Package (Agent 1) ===
 hybasis = case.BasisManager
@@ -807,6 +817,51 @@ def save_case(path):
         case.SaveAs(path)
 
 
+def _pump(seconds=0.5):
+    """Let HYSYS process its window messages (the PFD updates on them)."""
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            hysys.DoEvents()
+        except Exception:
+            pass
+        time.sleep(0.1)
+
+
+def layout_pfd(report_path=None):
+    """Arrange the PFD (graphics only: positions of icons) before the case is
+    saved. Units go left to right in process order, feeds enter from the left,
+    products leave to the right, recycles get their own lanes. Never fails the
+    run: problems are reported and the case is saved as built."""
+    if os.environ.get("S2S_PFD_LAYOUT", "1") == "0":
+        print("[pfd] layout disabled (S2S_PFD_LAYOUT=0)")
+        return None
+    try:
+        from sketch2sim.pfd_layout import layout_case
+    except ImportError as error:
+        print(
+            f"[pfd] layout skipped: sketch2sim.pfd_layout not importable ({_short(error)})"
+        )
+        return None
+    try:
+        report = layout_case(
+            case,
+            pump=_pump,
+            hide_helper_labels=os.environ.get("S2S_PFD_HIDE_HELPER_LABELS", "0") == "1",
+            preview_path=report_path[:-5] + ".png" if report_path else None,
+        )
+    except Exception as error:
+        print(f"[pfd] layout failed ({_short(error)}); the case is saved as built")
+        return None
+    if report and report_path:
+        try:
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=1, default=str)
+        except Exception as error:
+            print(f"[pfd] could not write the layout report: {_short(error)}")
+    return report
+
+
 ensure_property_package(globals().get("property_package"))
 set_solver_hold(True)  # build the whole flowsheet before HYSYS starts solving
 
@@ -832,6 +887,9 @@ safe_case_name = re.sub(r'[\\/*?:"<>|]', "_", case_name) + os.environ.get(
     "S2S_HSC_SUFFIX", ""
 )
 save_path = os.path.join(base_dir, safe_case_name + ".hsc")
+# The diagram is arranged first, so that the attachment check below also
+# proves that the layout changed nothing but positions.
+layout_pfd(os.path.join(base_dir, safe_case_name + "_pfd.json"))
 exit_code = finish_connections(
     os.path.join(base_dir, safe_case_name + "_topology.json")
 )

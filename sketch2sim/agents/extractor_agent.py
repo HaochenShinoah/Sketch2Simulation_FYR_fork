@@ -120,6 +120,7 @@ EXTRACTOR_SYSTEM_PROMPT = (
     "- Internal sections of a vessel (coalescer section, catalyst bed, demister, packing) are not equipment; do not emit them as units.\n"
     "- A storage tank or feed drum at the start of the process that only shows an outlet still receives the process feed drawn into it: emit that feed stream. Never invent a feed for a reflux drum, accumulator or knock-out drum downstream of a condenser or separator.\n"
     "- A stream that joins a line before a unit enters that unit.\n"
+    '- Names are PFD labels of at most four words ("Recycle Gas", "Reactor Effluent", "Feed Preheater"), never sentences or clauses; keep the equipment tag when the sketch shows one.\n'
     "- Return JSON only. No explanations.\n"
 )
 
