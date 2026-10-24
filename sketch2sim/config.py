@@ -24,6 +24,14 @@ Optional (connection)
     S2S_LLM_TIMEOUT             Per-request timeout in seconds (default 3600:
                                 a call at reasoning effort "max" can run long).
     S2S_LLM_MAX_RETRIES         SDK retries on transient errors (default 3).
+    S2S_LLM_BACKGROUND          "1" (default) runs Responses API calls in
+                                background mode: the request returns at once
+                                and the response is polled every
+                                S2S_LLM_POLL_INTERVAL seconds (default 5), so
+                                a proxy or firewall that drops idle connections
+                                cannot kill a long reasoning call. Background
+                                responses are stored server-side and deleted
+                                after retrieval unless S2S_OPENAI_STORE=1.
 
 Optional (models; one per agent)
     S2S_DESCRIPTOR_MODEL, S2S_DESCRIPTION_VALIDATOR_MODEL, S2S_EXTRACTOR_MODEL,
@@ -200,6 +208,14 @@ OPENAI_STORE = _env_str("S2S_OPENAI_STORE", "0").lower() in {"1", "true", "yes"}
 # answers, so the per-request timeout is an hour.
 LLM_TIMEOUT = _env_float("S2S_LLM_TIMEOUT", 3600.0)
 LLM_MAX_RETRIES = _env_int("S2S_LLM_MAX_RETRIES", 3)
+# A call at reasoning effort "max" may think for many minutes before its first
+# byte arrives, and a proxy or firewall on the way drops such idle connections
+# (WinError 10054 on cs7). Background mode submits the request and polls the
+# result with short requests instead. It needs the response stored
+# server-side; llm.py deletes the stored copy after retrieval unless
+# OPENAI_STORE is set.
+LLM_BACKGROUND = _env_str("S2S_LLM_BACKGROUND", "1").lower() in {"1", "true", "yes"}
+LLM_POLL_INTERVAL = _env_float("S2S_LLM_POLL_INTERVAL", 5.0)
 
 # ---------------------------------------------------------------------------
 # Decoding (deterministic settings of the paper: temperature 0, seed 42)
@@ -212,21 +228,22 @@ LLM_REASONING_EFFORT = _env_str("S2S_LLM_REASONING_EFFORT", "max") or None
 
 # Output caps. The original pipeline used num_predict=5000 for the code
 # agents. With a reasoning model at effort "max" the cap also covers the
-# reasoning tokens, which can run to tens of thousands per call (the
-# descriptor hit a cap of 8000 on cs1), and the Fixer echoes the whole script,
-# so the caps are sized for the visible answer plus a long think. They are
-# upper bounds, not budgets: a short answer costs no more. A call that hits
-# its cap raises instead of returning a truncated answer; a cap above the
-# maximum of the model is clamped by llm.py to the maximum the API reports.
-DESCRIPTOR_MAX_OUTPUT_TOKENS = _env_int("S2S_DESCRIPTOR_MAX_OUTPUT_TOKENS", 32000)
+# reasoning tokens: the descriptor spent 25 863 reasoning tokens on the cs7
+# sketch for a 1 462-token description (27 325 in all, against a cap of 8000
+# before), and the Fixer echoes the whole script, so the caps are sized for the
+# visible answer plus a long think with room to spare. They are upper bounds,
+# not budgets: a short answer costs no more. A call that hits its cap raises
+# instead of returning a truncated answer; a cap above the maximum of the
+# model is clamped by llm.py to the maximum the API reports.
+DESCRIPTOR_MAX_OUTPUT_TOKENS = _env_int("S2S_DESCRIPTOR_MAX_OUTPUT_TOKENS", 64000)
 DESCRIPTION_VALIDATOR_MAX_OUTPUT_TOKENS = _env_int(
-    "S2S_DESCRIPTION_VALIDATOR_MAX_OUTPUT_TOKENS", 16000
+    "S2S_DESCRIPTION_VALIDATOR_MAX_OUTPUT_TOKENS", 32000
 )
-EXTRACTOR_MAX_OUTPUT_TOKENS = _env_int("S2S_EXTRACTOR_MAX_OUTPUT_TOKENS", 48000)
-BASIS_MAX_OUTPUT_TOKENS = _env_int("S2S_BASIS_MAX_OUTPUT_TOKENS", 32000)
-INSTANTIATION_MAX_OUTPUT_TOKENS = _env_int("S2S_INSTANTIATION_MAX_OUTPUT_TOKENS", 48000)
-CONFIGURATION_MAX_OUTPUT_TOKENS = _env_int("S2S_CONFIGURATION_MAX_OUTPUT_TOKENS", 64000)
-FIXER_MAX_OUTPUT_TOKENS = _env_int("S2S_FIXER_MAX_OUTPUT_TOKENS", 96000)
+EXTRACTOR_MAX_OUTPUT_TOKENS = _env_int("S2S_EXTRACTOR_MAX_OUTPUT_TOKENS", 64000)
+BASIS_MAX_OUTPUT_TOKENS = _env_int("S2S_BASIS_MAX_OUTPUT_TOKENS", 48000)
+INSTANTIATION_MAX_OUTPUT_TOKENS = _env_int("S2S_INSTANTIATION_MAX_OUTPUT_TOKENS", 64000)
+CONFIGURATION_MAX_OUTPUT_TOKENS = _env_int("S2S_CONFIGURATION_MAX_OUTPUT_TOKENS", 96000)
+FIXER_MAX_OUTPUT_TOKENS = _env_int("S2S_FIXER_MAX_OUTPUT_TOKENS", 128000)
 
 # ---------------------------------------------------------------------------
 # Misc

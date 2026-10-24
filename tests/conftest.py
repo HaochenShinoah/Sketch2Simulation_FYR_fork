@@ -398,6 +398,8 @@ def _pinned_config(monkeypatch):
 
     monkeypatch.setattr(config, "OPENAI_API_MODE", "responses")
     monkeypatch.setattr(config, "OPENAI_STORE", False)
+    monkeypatch.setattr(config, "LLM_BACKGROUND", False)
+    monkeypatch.setattr(config, "LLM_POLL_INTERVAL", 0.0)
     monkeypatch.setattr(config, "LLM_TEMPERATURE", 0.0)
     monkeypatch.setattr(config, "LLM_SEED", 42)
     monkeypatch.setattr(config, "LLM_REASONING_EFFORT", "medium")

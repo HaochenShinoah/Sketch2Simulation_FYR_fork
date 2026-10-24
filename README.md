@@ -72,8 +72,9 @@ Optional variables (all have defaults, see `sketch2sim/config.py`):
 | `S2S_OPENAI_API_MODE` | `responses` (default) or `chat` for OpenAI-compatible gateways | `responses` |
 | `S2S_OPENAI_STORE` | `1` lets the Responses API keep responses server-side for 30 days | `0` |
 | `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | alternative endpoint / org / project | unset |
-| `S2S_*_MAX_OUTPUT_TOKENS` | per-agent output caps (reasoning tokens count against them, so they are sized for effort `max`); a cap above the model's maximum is clamped to the maximum the API reports and the change is logged | 16k–96k |
+| `S2S_*_MAX_OUTPUT_TOKENS` | per-agent output caps (reasoning tokens count against them, so they are sized for effort `max`); a cap above the model's maximum is clamped to the maximum the API reports and the change is logged | 32k–128k |
 | `S2S_LLM_TIMEOUT`, `S2S_LLM_MAX_RETRIES` | per-request timeout (s) and SDK retries on transient errors | `3600`, `3` |
+| `S2S_LLM_BACKGROUND`, `S2S_LLM_POLL_INTERVAL` | `1` runs Responses API calls in background mode (submit, then poll every N s), so a proxy or firewall that drops idle connections cannot kill a long reasoning call; the stored response is deleted after retrieval unless `S2S_OPENAI_STORE=1` | `1`, `5` |
 | `S2S_EXECUTOR_TIMEOUT`, `S2S_PYTHON_EXECUTABLE` | HYSYS script timeout (s) and interpreter | `600`, current interpreter |
 | `S2S_HSC_DIR` | where the generated script saves the `.hsc` | `outputs/` |
 | `S2S_HSC_SUFFIX` | suffix of the case file of one attempt (`_attemptN`); set by the executor, not by hand | unset |

@@ -60,8 +60,9 @@ def test_default_caps_and_timeout_fit_reasoning_effort_max():
         "configuration": config.CONFIGURATION_MAX_OUTPUT_TOKENS,
         "fixer": config.FIXER_MAX_OUTPUT_TOKENS,
     }
-    assert all(cap >= 16000 for cap in caps.values()), caps
-    assert caps["descriptor"] >= 32000  # hit 8000 on cs1 at effort max
+    assert all(cap >= 32000 for cap in caps.values()), caps
+    # the cs7 descriptor used 27 325 output tokens (25 863 of them reasoning)
+    assert caps["descriptor"] >= 2 * 27325
     assert caps["fixer"] == max(caps.values())  # it echoes the whole script
     assert config.LLM_TIMEOUT >= 3600
     assert config.LLM_MAX_RETRIES >= 3

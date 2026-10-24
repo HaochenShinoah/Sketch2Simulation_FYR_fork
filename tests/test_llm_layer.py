@@ -503,6 +503,100 @@ def test_output_cap_above_model_maximum_is_clamped_and_remembered(monkeypatch):
         llm.complete("gpt-6-astra", None, "USER", max_output_tokens=-5)
 
 
+def _background_client(sequence, calls, fail_polls=0):
+    """A Responses client whose create() returns a queued response and whose
+    retrieve() walks through ``sequence`` of statuses (after ``fail_polls``
+    connection errors)."""
+    statuses = iter(sequence)
+
+    def _response(status):
+        return SimpleNamespace(
+            id="resp_1",
+            status=status,
+            output_text="ok" if status == "completed" else "",
+            incomplete_details=None,
+            output=[],
+            error=None,
+            usage=None,
+        )
+
+    def create(**kwargs):
+        calls["create"].append(kwargs)
+        return _response("queued")
+
+    def retrieve(response_id):
+        calls["retrieve"].append(response_id)
+        if len(calls["retrieve"]) <= fail_polls:
+            raise openai.APIConnectionError(request=None)
+        return _response(next(statuses))
+
+    return SimpleNamespace(
+        responses=SimpleNamespace(
+            create=create,
+            retrieve=retrieve,
+            delete=lambda response_id: calls["delete"].append(response_id),
+            cancel=lambda response_id: calls["cancel"].append(response_id),
+        )
+    )
+
+
+def test_background_mode_polls_and_deletes_the_stored_response(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_MODE", "responses")
+    monkeypatch.setattr(config, "LLM_BACKGROUND", True)
+    monkeypatch.setattr(config, "LLM_POLL_INTERVAL", 0.0)
+    calls = {"create": [], "retrieve": [], "delete": [], "cancel": []}
+    client = _background_client(["in_progress", "completed"], calls, fail_polls=1)
+    monkeypatch.setattr(llm, "get_client", lambda: client)
+    result = llm.complete(
+        "gpt-6-astra", None, "USER", max_output_tokens=5, log_label="descriptor"
+    )
+    assert result.text == "ok" and result.finish == "completed"
+    assert calls["create"][0]["background"] is True
+    assert calls["create"][0]["store"] is True  # background responses are stored
+    # one poll failed with a connection error and was retried, two gave a status
+    assert calls["retrieve"] == ["resp_1", "resp_1", "resp_1"]
+    assert calls["delete"] == ["resp_1"]  # storing is off: nothing is kept
+    assert calls["cancel"] == []
+    # with storing allowed the response is kept
+    monkeypatch.setattr(config, "OPENAI_STORE", True)
+    calls = {"create": [], "retrieve": [], "delete": [], "cancel": []}
+    monkeypatch.setattr(
+        llm, "get_client", lambda: _background_client(["completed"], calls)
+    )
+    llm.complete("gpt-6-astra", None, "USER")
+    assert calls["delete"] == []
+
+
+def test_background_mode_times_out_and_cancels(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_MODE", "responses")
+    monkeypatch.setattr(config, "LLM_BACKGROUND", True)
+    monkeypatch.setattr(config, "LLM_POLL_INTERVAL", 0.0)
+    monkeypatch.setattr(config, "LLM_TIMEOUT", 0.0)
+    calls = {"create": [], "retrieve": [], "delete": [], "cancel": []}
+    monkeypatch.setattr(
+        llm, "get_client", lambda: _background_client(["in_progress"] * 5, calls)
+    )
+    with pytest.raises(llm.LLMError, match="cancelled"):
+        llm.complete("gpt-6-astra", None, "USER")
+    assert calls["cancel"] == ["resp_1"]
+
+
+def test_background_unsupported_by_gateway_falls_back_to_a_plain_call(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_MODE", "responses")
+    monkeypatch.setattr(config, "LLM_BACKGROUND", True)
+    recorder = _Recorder({"background": "unsupported_parameter"})
+    client = _fake_client(recorder)
+    monkeypatch.setattr(llm, "get_client", lambda: client)
+    result = llm.complete("gpt-6-astra", None, "USER")
+    assert result.text == "ok" and "background" in result.stripped_params
+    assert "background" not in recorder.calls[-1]
+    # the next call does not try background mode again and keeps storing off
+    result = llm.complete("gpt-6-astra", None, "USER")
+    assert recorder.calls[-1].get("store") is False
+    assert "background" not in recorder.calls[-1]
+    assert result.stripped_params == []
+
+
 def test_chat_cap_too_large_message_without_param_is_clamped(monkeypatch):
     monkeypatch.setattr(config, "OPENAI_API_MODE", "chat")
     recorder = _Recorder({})

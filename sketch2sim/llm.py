@@ -68,7 +68,10 @@ _STRIPPABLE_PARAMS = {
     "text",
     "response_format",
     "store",
+    "background",
 }
+# Background mode: the response is polled until it reaches one of these.
+_TERMINAL_STATUSES = {"completed", "failed", "incomplete", "cancelled"}
 _UNSUPPORTED_CODES = {"unsupported_parameter", "unsupported_value"}
 _UNSUPPORTED_MESSAGE_RE = re.compile(
     r"unsupported (?:parameter|value)s?|not supported (?:with|for|by) this model|"
@@ -276,9 +279,23 @@ def complete(
             temperature,
             reasoning_effort,
         )
+        background = config.LLM_BACKGROUND and "background" not in (
+            _unsupported_by_model.get(model) or set()
+        )
+        if background:
+            # Long calls (reasoning effort "max") run server-side: the request
+            # returns at once and the result is polled, so a proxy that drops
+            # idle connections cannot kill the call. Background responses must
+            # be stored; the stored copy is deleted below unless wanted.
+            kwargs["background"] = True
+            kwargs["store"] = True
         raw, stripped = _invoke_with_param_fallback(
             client.responses.create, kwargs, model
         )
+        if kwargs.get("background"):
+            raw = _wait_for_background_response(client, raw, model, log_label, started)
+        if background and not config.OPENAI_STORE:
+            _delete_response(client, raw)
         text = raw.output_text or ""
         finish = getattr(raw, "status", None)
         details = getattr(raw, "incomplete_details", None)
@@ -745,6 +762,76 @@ def _content_to_text(content: Any) -> str:
                 parts.append(str(getattr(part, "text", "") or ""))
         return "".join(parts)
     return str(content)
+
+
+def _wait_for_background_response(client, response, model, log_label, started):
+    """Poll a background response until it is complete (or failed/incomplete).
+
+    Short ``retrieve`` requests replace one long-lived connection. Transient
+    network errors while polling are retried (the response keeps running on
+    the server meanwhile). The wait is bounded by ``config.LLM_TIMEOUT`` from
+    the start of the call, after which the response is cancelled.
+    """
+    from openai import APIConnectionError, APIStatusError, APITimeoutError
+
+    label = log_label or model
+    response_id = getattr(response, "id", None)
+    interval = max(0.0, float(config.LLM_POLL_INTERVAL))
+    deadline = started + float(config.LLM_TIMEOUT)
+    failures = 0
+    last_report = time.monotonic()
+    while getattr(response, "status", None) not in _TERMINAL_STATUSES:
+        if not response_id:
+            raise LLMError(f"{label}: background response without an id")
+        now = time.monotonic()
+        if now >= deadline:
+            try:
+                client.responses.cancel(response_id)
+            except Exception:  # best effort: the deadline is the error here
+                pass
+            raise LLMError(
+                f"{label}: response {response_id} still "
+                f"{getattr(response, 'status', None)!r} after {now - started:.0f}s; "
+                "cancelled. Raise S2S_LLM_TIMEOUT or lower the reasoning effort."
+            )
+        if now - last_report >= 60:
+            print(
+                f"[llm] {label}: response {response_id} "
+                f"{getattr(response, 'status', None)} after {now - started:.0f}s"
+            )
+            last_report = now
+        time.sleep(interval)
+        try:
+            response = client.responses.retrieve(response_id)
+            failures = 0
+        except (APIConnectionError, APITimeoutError) as error:
+            failures += 1
+            if failures > 30:
+                raise LLMError(
+                    f"{label}: could not poll response {response_id} "
+                    f"({failures} consecutive failures): {error}"
+                ) from error
+        except APIStatusError as error:
+            if error.status_code == 429 or error.status_code >= 500:
+                failures += 1
+                if failures > 30:
+                    raise LLMError(
+                        f"{label}: could not poll response {response_id}: {error}"
+                    ) from error
+            else:
+                raise
+    return response
+
+
+def _delete_response(client, response) -> None:
+    """Remove a stored background response (best effort; S2S_OPENAI_STORE=0)."""
+    response_id = getattr(response, "id", None)
+    if not response_id:
+        return
+    try:
+        client.responses.delete(response_id)
+    except Exception as error:  # the answer is already in hand
+        print(f"[llm] could not delete stored response {response_id}: {error}")
 
 
 def _responses_refusal(raw: Any) -> str | None:
